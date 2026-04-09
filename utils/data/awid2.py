@@ -6,7 +6,7 @@ import pandas as pd
 AWID2_CSV_CLASESS = {
     "normal": 0,
     "flooding": 1,
-    "impresonation": 2,
+    "impersonation": 2,
     "injection": 6,
     "amok": 1,
     "arp": 6,
@@ -248,7 +248,7 @@ def convert_to_features(df: pd.DataFrame) -> tuple[pd.DataFrame, list[int]]:
         "radiotap.flags.badfcs",
         "radiotap.flags.shortgi",
     ]
-    features["rt_flags"] = sum(df[col] * 2**i for i, col in enumerate(flag_cols))
+    features["rt_flags"] = sum(df[col].astype(int) * 2**i for i, col in enumerate(flag_cols))
     features["rt_flags"] = features["rt_flags"].astype(float)
     features["rt_ant_signal_dbm"] = df["radiotap.dbm_antsignal"].astype(float)
     features["rt_datarate_100kbps"] = df["radiotap.datarate"].astype(float) * 10
