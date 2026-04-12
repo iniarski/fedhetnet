@@ -255,7 +255,7 @@ def convert_to_features(df: pd.DataFrame) -> tuple[pd.DataFrame, list[int]]:
     features["wlan_duration"] = df["wlan.duration"].astype(float)
     for type_ in range(3):
         features[f"wlan_type_{type_}"] = (df["wlan.fc.type"] == type_).astype(float)
-    for subtype in range(15):
+    for subtype in range(16):
         features[f"wlan_subtype_{subtype}"] = (df["wlan.fc.subtype"] == subtype).astype(
             float
         )
