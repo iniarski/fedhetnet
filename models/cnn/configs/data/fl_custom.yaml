@@ -1,0 +1,42 @@
+# configs/data/fl_custom.yaml
+#
+# Each client loads its own independent dataset file – realistic silo FL.
+# Use: python train_fl.py data=fl_custom
+#
+# Per-client overrides:
+#   class_sampling  – if omitted, the top-level class_sampling is used
+#   seq_len         – if omitted, train.seq_len from the main config is used
+
+mode: fl_custom
+
+# Validation data (shared, centralised evaluation)
+val_path: ??? # required – path to the shared validation capture
+
+class_sampling: [0.1, 1, 3, 2, 2, 8] # default; overridable per client
+
+# ── Client definitions ────────────────────────────────────────────────────
+clients:
+  - id: 0
+    path: ??? # required – path to client 0's capture script
+    # class_sampling: [0.05, 1, 4, 2, 2, 9]   # optional per-client override
+    # seq_len: 512                              # optional per-client override
+
+  - id: 1
+    path: ??? # required – path to client 1's capture script
+
+  - id: 2
+    path: ???
+
+  # Add as many clients as needed.  The list length determines n_clients.
+
+# ── Topology ──────────────────────────────────────────────────────────────
+clients_per_round: 2 # clients sampled per round
+
+# ── Schedule ──────────────────────────────────────────────────────────────
+n_rounds: 200
+local_epochs: 2 # more local epochs often beneficial for heterogeneous data
+
+# ── Optimisers ────────────────────────────────────────────────────────────
+client_lr: 0.01
+client_momentum: 0.9
+server_lr: 0.001

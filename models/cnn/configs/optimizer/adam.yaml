@@ -1,0 +1,8 @@
+optimizer: "adam"
+lr: 0.00001
+b1: 0.9
+b2: 0.95
+lr_schedule: "cosine"
+warmup_pct: 0.1
+div_factor: 25.0
+final_div_factor: 10000.0

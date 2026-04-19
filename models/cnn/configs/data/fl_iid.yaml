@@ -1,0 +1,26 @@
+# configs/data/fl_iid.yaml
+#
+# IID random partition across a fixed number of simulated clients.
+# Use: python train_fl.py data=fl_iid
+#
+# The training set is shuffled once and split evenly; each client's class
+# distribution mirrors the global distribution (IID assumption).
+
+mode: fl_iid
+
+dataset_path: "/home/filip/projects/fedhetnet/datasets/awid3_ds.sh"
+
+class_sampling: [0.1, 1, 3, 2, 2, 8]
+
+# ── Topology ──────────────────────────────────────────────────────────────
+n_clients: 20 # total simulated clients to partition data into
+clients_per_round: 5 # clients sampled per round  (C = 5/20 = 0.25)
+
+# ── Schedule ──────────────────────────────────────────────────────────────
+n_rounds: 200
+local_epochs: 1 # local SGD epochs each selected client runs
+
+# ── Optimisers ────────────────────────────────────────────────────────────
+client_lr: 0.01
+client_momentum: 0.9
+server_lr: 0.001

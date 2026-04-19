@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fedhetnet"
+version = "0.1.0"
+requires-python = ">= 3.12"
+
+# Runtime dependencies — adjust versions to match your environment
+dependencies = [
+    "cloudpickle",
+    "jax >= 0.4.34",
+    "jaxlib",
+    "flax",
+    "optax",
+    "fedjax",
+    "hydra-core",
+    "omegaconf",
+    "wandb",
+    "numpy",
+    "scikit-learn",
+    "tensorflow",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+gpu = [
+    "jax[cuda13_local]",
+    "tensorflow[and-cuda]"
+]
+notebook = [
+    "jupyterlab~=3.2.0",
+    "seaborn~=0.13.2",
+    "treescope~=0.1.9"
+]
+
+
+[tool.setuptools.packages.find]
+# Discover all packages (models/, utils/, and their sub-packages)
+# from the project root. The root __init__.py must be deleted for this
+# to work correctly — the root dir is a project, not a package.
+where = ["."]
+include = ["models*", "utils*"]
+
+[tool.setuptools.package-data]
+# Include yaml configs so hydra can find them after install
+"models" = ["**/configs/**/*.yaml"]

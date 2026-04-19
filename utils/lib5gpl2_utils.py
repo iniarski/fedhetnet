@@ -9,7 +9,7 @@ from sklearn.model_selection import train_test_split
 
 from lib5gpl2 import lib5gpl2py
 
-from data.npzloader import CLASS_SAMPLING
+from utils.data.dataloader import CLASS_SAMPLING
 
 def read_labeling_from_script(script_path: str) -> dict[str: lib5gpl2py.LabelingRules]:
     with open(script_path) as f:
@@ -98,7 +98,7 @@ def make_dataset(
         seed: int = 42,
         shuffle: bool = False,
         buffer_size: int = int(5e6),
-        float_tokenization: bool = False,
+        float_tokenization: bool = True,
         normal_only: bool = False,
         split: float = 0.8
 ) -> tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray], list[np.ndarray]]:
@@ -115,7 +115,7 @@ def make_dataset(
 
     for file, labeling in labeling_rules.items():
         with lib5gpl2py.LabeledCapture(
-            file, batch_size, labeling, selected_features, buffer_size=buffer_size, live_capture=False, float_tokenization=float_tokenization
+            file, batch_size, labeling, buffer_size=buffer_size, live_capture=False, float_tokenization=float_tokenization
         ) as cap:
             for _tokens, _labels, _ in cap:
                 sample_class = np.max(_labels)

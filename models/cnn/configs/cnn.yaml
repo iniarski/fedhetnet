@@ -1,0 +1,11 @@
+defaults:
+  - _self_
+  - model: base
+  - optimizer: adamw
+  - train: base
+  - data: fl_iid
+float: True
+name: cnn_base
+hydra:
+  run:
+    dir: ./runs/${name}/${now:%Y-%m-%d}/${now:%H-%M-%S}
