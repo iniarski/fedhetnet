@@ -10,15 +10,15 @@ mode: fl_iid
 
 dataset_path: "/home/filip/projects/fedhetnet/datasets/awid3_ds.sh"
 
-class_sampling: [0.1, 1, 3, 2, 2, 8]
+class_sampling: [0.01, 1, 3, 2, 2, 8]
 
 # ── Topology ──────────────────────────────────────────────────────────────
-n_clients: 20 # total simulated clients to partition data into
-clients_per_round: 5 # clients sampled per round  (C = 5/20 = 0.25)
+n_clients: 10 # total simulated clients to partition data into
+clients_per_round: 4 # clients sampled per round  (C = 5/20 = 0.25)
 
 # ── Schedule ──────────────────────────────────────────────────────────────
 n_rounds: 200
-local_epochs: 1 # local SGD epochs each selected client runs
+local_epochs: 5 # local SGD epochs each selected client runs
 
 # ── Optimisers ────────────────────────────────────────────────────────────
 client_lr: 0.01

@@ -1,9 +1,9 @@
 batch_size: 16
 grad_accum: 1
 n_steps: 1800
-log_freq: 60
-save_freq: 180
-val_freq: 600
+log_freq: 20
+save_freq: 20
+val_freq: 20
 n_val_steps: 64
 seed: 42
 seq_len: 256

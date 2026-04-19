@@ -6,6 +6,7 @@ defaults:
   - data: fl_iid
 float: True
 name: cnn_base
+save_npz: False
 hydra:
   run:
     dir: ./runs/${name}/${now:%Y-%m-%d}/${now:%H-%M-%S}

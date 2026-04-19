@@ -147,14 +147,14 @@ def main(cfg: DictConfig) -> None:
             script_path=cfg.data.dataset_path,
             batch_size=cfg.train.seq_len,
             seed=cfg.train.seed,
-            class_sampling=list(cfg.data.get("class_sampling", [0.1, 1, 3, 2, 2, 8])),
+            class_sampling=list(cfg.data.get("class_sampling", [0.01, 1, 3, 2, 2, 8])),
         )
     else:  # fl_custom: validation set comes from cfg.data.val_path
         _, _, X_val, y_val = make_dataset(
             script_path=cfg.data.val_path,
             batch_size=cfg.train.seq_len,
             seed=cfg.train.seed,
-            class_sampling=list(cfg.data.get("class_sampling", [0.1, 1, 3, 2, 2, 8])),
+            class_sampling=list(cfg.data.get("class_sampling", [0.01, 1, 3, 2, 2, 8])),
         )
 
     # ------------------------------------------------------------------
@@ -231,15 +231,6 @@ def main(cfg: DictConfig) -> None:
 
         server_state, client_diagnostics = algorithm.apply(server_state, round_clients)
         log_dict["perf/round_time"] = time.perf_counter() - round_start
-
-        if client_diagnostics:
-            losses = [
-                float(v.get("loss", v.get("train_loss", 0.0)))
-                for v in client_diagnostics.values()
-            ]
-            log_dict["train/mean_client_loss"] = float(np.mean(losses))
-            log_dict["train/n_clients"]         = len(round_clients)
-
         # ---- Validation ---------------------------------------------
         if round_num % cfg.train.val_freq == 0 or round_num == n_rounds - 1:
             val_start   = time.perf_counter()
