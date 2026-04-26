@@ -1,10 +1,32 @@
+"""
+fl_utils.py – Federated Learning client creation utilities.
+
+Supports three data modes controlled via cfg.data.mode:
+
+  centralized   Full dataset as a single pseudo-client.
+  fl_iid        Dataset randomly partitioned IID across n_clients.
+  fl_custom     Each client owns its own file; a val_fraction of every
+                client's data is held out and pooled into a shared
+                validation set. No val_path required.
+
+Public API
+----------
+  build_clients(cfg, X_train, y_train)
+      -> (List[FLClient], X_val | None, y_val | None)
+
+  sample_round(clients, n, round_num, base_seed)
+      -> FedJAX client tuples
+
+  client_summary(clients)
+      -> prints per-client statistics
+"""
+
 from __future__ import annotations
 
 import dataclasses
 import logging
 from typing import List, Optional, Sequence, Tuple
 
-import utils.fedjax_compat
 import fedjax
 import jax
 import numpy as np
@@ -14,14 +36,19 @@ from utils.lib5gpl2_utils import make_dataset
 
 log = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Data container
+# ---------------------------------------------------------------------------
+
 @dataclasses.dataclass
 class FLClient:
+    """Holds a single client's identity and local training dataset."""
     client_id: int
-    dataset: fedjax.ClientDataset
+    dataset:   fedjax.ClientDataset
     n_samples: int = dataclasses.field(init=False)
 
     def __post_init__(self):
-        # ClientDataset wraps a dict; 'y' always present and 1-D or 2-D
         y = self.dataset.all_examples()["y"]
         self.n_samples = int(y.shape[0])
 
@@ -29,52 +56,34 @@ class FLClient:
         return f"FLClient(id={self.client_id}, n_samples={self.n_samples})"
 
 
+# ---------------------------------------------------------------------------
+# Mode: centralized
+# ---------------------------------------------------------------------------
 
 def make_centralized_client(
     X_list: List[np.ndarray],
     y_list: List[np.ndarray],
-) -> List[FLClient]:
-    """
-    Wrap the entire training set as a single FLClient (client_id=0).
-
-    Running FedAvg with one client that sees the full dataset is identical
-    to standard mini-batch SGD, so this mode preserves numerical parity
-    with the original centralised training script while reusing the FL loop.
-    """
-    all_x = np.stack(X_list)  # (N, seq_len, n_features)
-    all_y = np.stack(y_list)  # (N, seq_len)
-
+) -> Tuple[List[FLClient], None, None]:
+    all_x = np.stack(X_list)
+    all_y = np.stack(y_list)
     log.info("Centralized mode: single client with %d samples.", len(all_x))
-    return [
-        FLClient(
-            client_id=0,
-            dataset=fedjax.ClientDataset({"x": all_x, "y": all_y}),
-        )
-    ]
+    clients = [FLClient(
+        client_id=0,
+        dataset=fedjax.ClientDataset({"x": all_x, "y": all_y}),
+    )]
+    return clients, None, None
 
 
+# ---------------------------------------------------------------------------
+# Mode: fl_iid
+# ---------------------------------------------------------------------------
 
 def make_iid_clients(
     X_list: List[np.ndarray],
     y_list: List[np.ndarray],
     n_clients: int,
     seed: int,
-) -> List[FLClient]:
-    """
-    Randomly shuffle and evenly partition the dataset into n_clients shards.
-
-    Because the permutation is global the resulting shards are IID — each
-    client's class distribution mirrors the population distribution.
-
-    Args:
-        X_list:    List of feature arrays, each shape (seq_len, n_features).
-        y_list:    Corresponding label arrays, each shape (seq_len,).
-        n_clients: Number of clients to create.
-        seed:      NumPy seed for reproducible shuffling.
-
-    Returns:
-        List of FLClient, one per shard.
-    """
+) -> Tuple[List[FLClient], None, None]:
     all_x = np.stack(X_list)
     all_y = np.stack(y_list)
 
@@ -90,69 +99,95 @@ def make_iid_clients(
             dataset=fedjax.ClientDataset({"x": sx, "y": sy}),
         )
         for i, (sx, sy) in enumerate(zip(splits_x, splits_y))
-        if len(sx) > 0   # drop empty shards that can arise with small datasets
+        if len(sx) > 0
     ]
-
-    log.info(
-        "IID FL: %d clients, ~%d samples/client.",
-        len(clients),
-        len(all_x) // n_clients,
-    )
-    return clients
+    log.info("IID FL: %d clients, ~%d samples/client.",
+             len(clients), len(all_x) // n_clients)
+    return clients, None, None
 
 
+# ---------------------------------------------------------------------------
+# Mode: fl_custom
+# ---------------------------------------------------------------------------
 
 def make_custom_clients(
     client_cfgs: Sequence[DictConfig],
     seq_len: int,
     seed: int,
-    float_tokenization: bool,
     class_sampling: List[float],
-) -> List[FLClient]:
+    val_fraction: float = 0.2,
+) -> Tuple[List[FLClient], List[np.ndarray], List[np.ndarray]]:
     """
-    Load each client's dataset from an independent file path.
+    Load each client's dataset from an independent file, then hold out
+    val_fraction of every client's sequences into a shared validation pool.
+
+    The split is done after make_dataset so the class_sampling weights apply
+    to the full file first; the val split is then a random stratified slice
+    of the resulting sequences.
 
     Each entry in client_cfgs must have:
-        id    (int)  – unique client identifier
-        path  (str)  – path accepted by make_dataset's script_path argument
+        id    (int) – unique client identifier
+        path  (str) – path accepted by make_dataset's script_path argument
 
-    Optionally, each entry may override:
-        class_sampling  (list[float]) – per-class weights for this client
-        seq_len         (int)         – sequence length for this client
-
-    This mirrors a real-world silo-FL scenario where each participating site
-    owns a private dataset generated from a different traffic capture.
+    Optionally per-client:
+        class_sampling  (list[float]) – overrides global class_sampling
+        seq_len         (int)         – overrides global seq_len
+        val_fraction    (float)       – overrides global val_fraction
 
     Returns:
-        List of FLClient, one per entry in client_cfgs.
+        clients  – List[FLClient] with training data only
+        X_val    – list of val sequences pooled from all clients
+        y_val    – corresponding labels
     """
-    clients = []
+    clients: List[FLClient] = []
+    X_val_pool: List[np.ndarray] = []
+    y_val_pool: List[np.ndarray] = []
+
+    rng = np.random.default_rng(seed)
+
     for spec in client_cfgs:
-        client_class_sampling = list(
-            spec.get("class_sampling", class_sampling)
-        )
-        client_seq_len = int(spec.get("seq_len", seq_len))
+        client_class_sampling = list(spec.get("class_sampling", class_sampling))
+        client_seq_len        = int(spec.get("seq_len", seq_len))
+        client_val_frac       = float(spec.get("val_fraction", val_fraction))
 
         X, y, _, _ = make_dataset(
             script_path=str(spec.path),
             batch_size=client_seq_len,
             seed=seed,
             class_sampling=client_class_sampling,
-            float_tokenization=float_tokenization,
         )
+
+        all_x = np.stack(X)   # (N, seq_len, n_features)
+        all_y = np.stack(y)   # (N, seq_len)
+        N     = len(all_x)
+
+        # Reproducible shuffle then split
+        perm      = rng.permutation(N)
+        n_val     = max(1, int(N * client_val_frac))
+        val_idx   = perm[:n_val]
+        train_idx = perm[n_val:]
+
+        X_val_pool.extend(all_x[val_idx])
+        y_val_pool.extend(all_y[val_idx])
 
         client = FLClient(
             client_id=int(spec.id),
             dataset=fedjax.ClientDataset({
-                "x": np.stack(X),
-                "y": np.stack(y),
+                "x": all_x[train_idx],
+                "y": all_y[train_idx],
             }),
         )
         clients.append(client)
-        log.info("Custom client %d loaded from '%s' (%d samples).",
-                 client.client_id, spec.path, client.n_samples)
 
-    return clients
+        log.info(
+            "Custom client %d: %d train / %d val sequences from '%s'.",
+            client.client_id, len(train_idx), n_val, spec.path,
+        )
+
+    log.info("Shared val pool: %d sequences from %d clients.",
+             len(X_val_pool), len(clients))
+
+    return clients, X_val_pool, y_val_pool
 
 
 # ---------------------------------------------------------------------------
@@ -163,22 +198,16 @@ def build_clients(
     cfg: DictConfig,
     X_train: Optional[List[np.ndarray]] = None,
     y_train: Optional[List[np.ndarray]] = None,
-) -> List[FLClient]:
+) -> Tuple[List[FLClient], Optional[List[np.ndarray]], Optional[List[np.ndarray]]]:
     """
-    Dispatch to the correct client-creation function based on cfg.data.mode.
-
-    Args:
-        cfg:     Full Hydra config. Must contain a `data` sub-config with at
-                 least a `mode` key.
-        X_train: Pre-loaded training feature sequences. Required for
-                 `centralized` and `fl_iid` modes; ignored for `fl_custom`.
-        y_train: Corresponding labels. Same requirements as X_train.
+    Dispatch to the correct client-creation function.
 
     Returns:
-        List[FLClient] ready to be passed to sample_round().
+        (clients, X_val, y_val)
 
-    Raises:
-        ValueError: Unknown mode or missing required arguments.
+        For centralized / fl_iid modes, X_val and y_val are None — the
+        caller is expected to supply a pre-loaded val set (from make_dataset).
+        For fl_custom, X_val and y_val are the pooled held-out sequences.
     """
     mode = cfg.data.mode
 
@@ -195,12 +224,13 @@ def build_clients(
         )
 
     elif mode == "fl_custom":
+        val_fraction = float(cfg.data.get("val_fraction", 0.2))
         return make_custom_clients(
             client_cfgs=cfg.data.clients,
             seq_len=int(cfg.train.seq_len),
             seed=int(cfg.train.seed),
-            float_tokenization=bool(cfg.float),
-            class_sampling=list(cfg.data.get("class_sampling", [0.1, 1, 3, 2, 2, 8])),
+            class_sampling=list(cfg.data.get("class_sampling", [0.01, 1, 3, 2, 2, 8])),
+            val_fraction=val_fraction,
         )
 
     else:
@@ -220,24 +250,7 @@ def sample_round(
     round_num: int,
     base_seed: int,
 ) -> List[Tuple[int, fedjax.ClientDataset, jax.Array]]:
-    """
-    Sample up to n_per_round clients for a single FL round.
-
-    For centralized mode (single client) the lone client is always returned
-    regardless of n_per_round, so the training loop needs no special-casing.
-
-    Args:
-        clients:     Full pool of FLClients.
-        n_per_round: Maximum number of clients to sample.
-        round_num:   Current round index (used to derive per-round RNG).
-        base_seed:   Global seed from cfg.train.seed.
-
-    Returns:
-        List of (client_id, ClientDataset, jax.PRNGKey) tuples accepted by
-        fedjax algorithm.apply().
-    """
     if len(clients) == 1:
-        # Centralized: always use the only client
         prng = jax.random.PRNGKey(base_seed + round_num)
         return [(clients[0].client_id, clients[0].dataset, prng)]
 
@@ -258,20 +271,24 @@ def sample_round(
 
 
 # ---------------------------------------------------------------------------
-# Diagnostics helper
+# Diagnostics
 # ---------------------------------------------------------------------------
 
 def client_summary(clients: List[FLClient]) -> None:
-    """Print a per-client sample count and basic class distribution."""
-    print(f"\n{'─'*55}")
-    print(f"  {'Client':>8}  {'Samples':>10}  {'Classes (approx)':>20}")
-    print(f"{'─'*55}")
+    """Print per-client sample count and class distribution."""
+    print(f"\n{'─'*65}")
+    print(f"  {'Client':>8}  {'Train samples':>14}  Class distribution")
+    print(f"{'─'*65}")
     for c in clients:
-        y = c.dataset.all_examples()["y"].flatten()
+        y      = c.dataset.all_examples()["y"].flatten()
+        total  = len(y)
         unique, counts = np.unique(y, return_counts=True)
-        dist = ", ".join(f"{u}:{cnt}" for u, cnt in zip(unique, counts))
-        print(f"  {c.client_id:>8}  {c.n_samples:>10}  {dist:>20}")
-    print(f"{'─'*55}\n")
+        dist   = "  ".join(
+            f"cls{u}:{cnt}({100*cnt/total:.0f}%)"
+            for u, cnt in zip(unique, counts)
+        )
+        print(f"  {c.client_id:>8}  {c.n_samples:>14}  {dist}")
+    print(f"{'─'*65}\n")
 
 
 # ---------------------------------------------------------------------------

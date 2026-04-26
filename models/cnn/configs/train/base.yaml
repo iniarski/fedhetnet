@@ -1,10 +1,10 @@
 batch_size: 16
 grad_accum: 1
 n_steps: 1800
-log_freq: 20
-save_freq: 20
-val_freq: 20
-n_val_steps: 64
+log_freq: 200
+save_freq: 200
+val_freq: 200
+n_val_steps: 1024
 seed: 42
 seq_len: 256
-logging: "console"
+logging: "csv"

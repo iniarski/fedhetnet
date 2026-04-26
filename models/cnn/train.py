@@ -1,15 +1,14 @@
-
 import functools as ft
 import os
 import time
 
-import utils.fedjax_compat
+import utils.fedjax_compat  # must come before fedjax – patches jax.tree_* aliases
 import fedjax
 import hydra
 import jax
 import jax.numpy as jnp
 import numpy as np
-import optax
+import tensorflow as tf
 import wandb
 from omegaconf import DictConfig, OmegaConf
 from sklearn.metrics import (
@@ -22,40 +21,154 @@ from sklearn.metrics import (
 from tqdm import trange
 
 import utils.export
+from utils.data.csvlogger import CSVLogger
 from models.cnn.model import CNN, CNNConfig
-from utils.train_utils import forward, init
+from utils.train_utils import forward, get_dataset, get_optimizer, gradient_step, init
 from utils.lib5gpl2_utils import make_dataset
-
 from utils.fl_utils import build_clients, client_summary, sample_round
 
 N_FEATURES = 33
+N_CLASSES  = 6
 
 
 # ---------------------------------------------------------------------------
-# Loss
+# CSV logging helpers
 # ---------------------------------------------------------------------------
 
-def focal_loss(batch, preds, gamma: float = 2.0, eps: float = 1e-7, num_classes: int = 6):
-    """Focal softmax cross-entropy. Signature: (batch, preds) per FedJAX convention."""
+def make_fieldnames(mode: str) -> list[str]:
+    """
+    Return the complete, ordered list of CSV column names for a given mode.
+    All columns are declared upfront so the header is written once and every
+    row has the same shape — missing values on non-val steps are written as "".
+    """
+    # Step/round counter — name differs per mode but mapped to same column
+    index_col = ["step"] if mode == "centralized" else ["round"]
+
+    train_cols = (
+        ["train/loss"]                 if mode == "centralized" else
+        ["train/mean_delta_l2_norm",
+         "train/max_delta_l2_norm",
+         "train/n_clients"]
+    )
+
+    val_cols = [
+        "val/loss", "val/acc", "val/prec", "val/rec", "val/f1",
+        *[f"val/class_{i}_{m}"
+          for i in range(N_CLASSES)
+          for m in ("prec", "rec", "f1")],
+    ]
+
+    perf_cols = (
+        ["perf/step_time", "perf/val_time"] if mode == "centralized" else
+        ["perf/round_time", "perf/val_time"]
+    )
+
+    return index_col + train_cols + val_cols + perf_cols
+
+
+def csv_log(logger: CSVLogger, log_dict: dict) -> None:
+    """Write log_dict to CSV, filling any missing fieldnames with empty string."""
+    row = {k: log_dict.get(k, "") for k in logger.fieldnames}
+    logger.log(row)
+
+
+# ---------------------------------------------------------------------------
+# Shared loss  (focal softmax cross-entropy)
+# ---------------------------------------------------------------------------
+
+def focal_loss_fn(model, variables, key, x, y,
+                  gamma: float = 2.0, eps: float = 1e-7):
+    """Centralised signature: (model, variables, key, x, y) → (scalar, state)."""
+    logits, state = forward(model, variables, key, *x)
+    probs    = jax.nn.softmax(logits, axis=-1)
+    ohe      = jax.nn.one_hot(y, num_classes=N_CLASSES)
+    p_t      = jnp.sum(ohe * probs, axis=-1)
+    loss     = -jnp.mean((1 - p_t) ** gamma * jnp.log(p_t + eps))
+    return loss, state
+
+
+def focal_loss_fedjax(batch, preds,
+                      gamma: float = 2.0, eps: float = 1e-7):
+    """FedJAX signature: (batch, preds) → scalar."""
     y     = batch["y"]
     probs = jax.nn.softmax(preds, axis=-1)
-    ohe   = jax.nn.one_hot(y, num_classes=num_classes)
+    ohe   = jax.nn.one_hot(y, num_classes=N_CLASSES)
     p_t   = jnp.sum(ohe * probs, axis=-1)
     return -jnp.mean((1 - p_t) ** gamma * jnp.log(p_t + eps))
 
 
 # ---------------------------------------------------------------------------
-# FedJAX model wrapper
+# Validation
 # ---------------------------------------------------------------------------
 
-def build_fedjax_model(cnn: CNN, input_dtype, batch_size: int, seq_len: int, n_features: int):
-    """
-    Wrap ml5g's CNN in a fedjax.Model.
+def run_validation_centralized(loss_fn, forward_fn, variables,
+                                val_ds, n_val_steps, val_key):
+    val_loss = 0.0
+    y_label, y_pred = [], []
 
-    The full Flax variables dict (params + optional batch_stats) is used as
-    FedJAX's 'params' object so ml5g's forward() helper works unmodified.
-    """
+    for _ in range(n_val_steps):
+        val_key, subkey = jax.random.split(val_key)
+        *x, y = next(val_ds)
+        loss, _ = loss_fn(variables, subkey, x, y)
+        pred, _ = forward_fn(variables, subkey, *x)
+        val_loss += loss
+        y_label.append(y.flatten())
+        y_pred.append(pred.argmax(axis=-1).flatten())
 
+    return _compute_metrics(val_loss / n_val_steps, y_label, y_pred), val_key
+
+
+def run_validation_fl(apply_for_eval, variables, X_val, y_val,
+                      n_val_steps, batch_size):
+    """
+    Evaluate on n_val_steps batches of batch_size sequences drawn in order
+    from X_val / y_val — no resampling, comparable volume to centralised.
+    """
+    val_loss = 0.0
+    y_label, y_pred = [], []
+
+    for i in range(n_val_steps):
+        start = i * batch_size
+        end   = start + batch_size
+        if end > len(X_val):
+            break
+
+        x      = jnp.stack(X_val[start:end])   # (B, T, F)
+        y      = jnp.stack(y_val[start:end])   # (B, T)
+        batch  = {"x": x, "y": y}
+        logits = apply_for_eval(variables, batch)
+        val_loss += float(focal_loss_fedjax(batch, logits))
+        y_label.append(np.array(y).flatten())
+        y_pred.append(np.array(logits.argmax(axis=-1)).flatten())
+
+    return _compute_metrics(val_loss / max(1, len(y_label)), y_label, y_pred)
+
+
+def _compute_metrics(mean_loss, y_label, y_pred):
+    y_true = np.concatenate(y_label)
+    y_hat  = np.concatenate(y_pred)
+    metrics = {
+        "val/loss": float(mean_loss),
+        "val/acc":  accuracy_score(y_true, y_hat),
+        "val/prec": precision_score(y_true, y_hat, average="macro", zero_division=0),
+        "val/rec":  recall_score(y_true, y_hat, average="macro", zero_division=0),
+        "val/f1":   f1_score(y_true, y_hat, average="macro", zero_division=0),
+    }
+    prec_pc, rec_pc, f1_pc, _ = precision_recall_fscore_support(
+        y_true, y_hat, labels=list(range(N_CLASSES)), zero_division=0
+    )
+    for i in range(N_CLASSES):
+        metrics[f"val/class_{i}_prec"] = float(prec_pc[i])
+        metrics[f"val/class_{i}_rec"]  = float(rec_pc[i])
+        metrics[f"val/class_{i}_f1"]   = float(f1_pc[i])
+    return metrics
+
+
+# ---------------------------------------------------------------------------
+# FedJAX model wrapper  (FL modes only)
+# ---------------------------------------------------------------------------
+
+def build_fedjax_model(cnn: CNN):
     def _init(rng, sample_batch):
         return init(cnn, rng, sample_batch["x"], print_summary=True)
 
@@ -71,101 +184,92 @@ def build_fedjax_model(cnn: CNN, input_dtype, batch_size: int, seq_len: int, n_f
         init=_init,
         apply_for_train=_apply_for_train,
         apply_for_eval=_apply_for_eval,
-        train_loss=focal_loss,
+        train_loss=focal_loss_fedjax,
         eval_metrics={"accuracy": fedjax.metrics.Accuracy()},
     )
 
 
 # ---------------------------------------------------------------------------
-# Centralised validation
+# Training loops
 # ---------------------------------------------------------------------------
 
-def run_validation(apply_for_eval, variables, X_val, y_val, n_val_steps: int) -> dict:
-    y_label, y_pred_list, val_loss_total = [], [], 0.0
+def train_centralized(cfg, cnn, variables, X_train, y_train, X_val, y_val,
+                      ckpt_variables, key, logger: CSVLogger):
+    """Original step-based training loop — no FedJAX involved."""
+    key, data_key, train_key, val_key = jax.random.split(key, 4)
 
-    for x, y in zip(X_val[:n_val_steps], y_val[:n_val_steps]):
-        batch  = {"x": jnp.expand_dims(x, 0), "y": jnp.expand_dims(y, 0)}
-        logits = apply_for_eval(variables, batch)
-        val_loss_total += float(focal_loss(batch, logits))
-        y_label.append(np.array(y).flatten())
-        y_pred_list.append(np.array(logits.argmax(axis=-1)).flatten())
-
-    y_true = np.concatenate(y_label)
-    y_hat  = np.concatenate(y_pred_list)
-
-    metrics = {
-        "val/loss": val_loss_total / n_val_steps,
-        "val/acc":  accuracy_score(y_true, y_hat),
-        "val/prec": precision_score(y_true, y_hat, average="macro", zero_division=0),
-        "val/rec":  recall_score(y_true, y_hat, average="macro", zero_division=0),
-        "val/f1":   f1_score(y_true, y_hat, average="macro", zero_division=0),
-    }
-
-    prec_pc, rec_pc, f1_pc, _ = precision_recall_fscore_support(
-        y_true, y_hat, labels=list(range(6)), zero_division=0
+    optimizer = get_optimizer(
+        **cfg.optimizer,
+        n_steps=cfg.data.n_rounds,
+        grad_accum=cfg.train.grad_accum,
     )
-    for i in range(6):
-        metrics[f"val/class_{i}_prec"] = float(prec_pc[i])
-        metrics[f"val/class_{i}_rec"]  = float(rec_pc[i])
-        metrics[f"val/class_{i}_f1"]   = float(f1_pc[i])
+    opt_state = optimizer.init(variables["params"])
 
-    return metrics
+    loss_fn    = jax.jit(ft.partial(focal_loss_fn, cnn))
+    step_fn    = jax.jit(ft.partial(gradient_step, optimizer, loss_fn))
+    forward_fn = jax.jit(ft.partial(forward, cnn))
 
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-@hydra.main(version_base=None, config_path="configs/", config_name="cnn")
-def main(cfg: DictConfig) -> None:
-    n_features  = N_FEATURES
     input_dtype = jnp.float32 if cfg.float else jnp.uint8
-    mode        = cfg.data.mode
-
-    key      = jax.random.PRNGKey(cfg.train.seed)
-    init_key = jax.random.split(key, 1)[0]
-
-    # ------------------------------------------------------------------
-    # Model
-    # ------------------------------------------------------------------
-    cnn          = CNN(CNNConfig(**cfg.model))
-    fedjax_model = build_fedjax_model(
-        cnn, input_dtype,
-        batch_size=cfg.train.batch_size,
-        seq_len=cfg.train.seq_len,
-        n_features=n_features,
+    output_signature = (
+        tf.TensorSpec(shape=(X_train[0].shape[0], X_train[0].shape[1]), dtype=input_dtype),
+        tf.TensorSpec(shape=(X_train[0].shape[0],), dtype=tf.uint8),
     )
+    train_ds = get_dataset(X_train, y_train, train_key,
+                           batch_size=cfg.train.batch_size,
+                           generator_signature=output_signature)
+    val_ds   = get_dataset(X_val,   y_val,   val_key,
+                           batch_size=cfg.train.batch_size,
+                           generator_signature=output_signature)
 
-    # ------------------------------------------------------------------
-    # Dataset loading
-    # ------------------------------------------------------------------
-    # fl_custom loads data per-client inside build_clients(); the shared
-    # train split is only needed for centralized / fl_iid.
-    X_train = y_train = None
-    if mode in ("centralized", "fl_iid"):
-        X_train, y_train, X_val, y_val = make_dataset(
-            script_path=cfg.data.dataset_path,
-            batch_size=cfg.train.seq_len,
-            seed=cfg.train.seed,
-            class_sampling=list(cfg.data.get("class_sampling", [0.01, 1, 3, 2, 2, 8])),
-        )
-    else:  # fl_custom: validation set comes from cfg.data.val_path
-        _, _, X_val, y_val = make_dataset(
-            script_path=cfg.data.val_path,
-            batch_size=cfg.train.seq_len,
-            seed=cfg.train.seed,
-            class_sampling=list(cfg.data.get("class_sampling", [0.01, 1, 3, 2, 2, 8])),
-        )
+    n_steps = int(cfg.data.n_rounds)
 
-    # ------------------------------------------------------------------
-    # Build federated clients
-    # ------------------------------------------------------------------
-    clients = build_clients(cfg, X_train, y_train)
+    for step in trange(n_steps, desc="[centralized] steps"):
+        log_dict   = {}
+        train_loss = 0.0
+        start      = time.perf_counter()
+
+        for _ in range(cfg.train.grad_accum):
+            train_key, subkey = jax.random.split(train_key)
+            *x, y = next(train_ds)
+            variables, opt_state, loss = step_fn(variables, opt_state, subkey, x, y)
+            train_loss += loss
+
+        log_dict["step"]           = step
+        log_dict["train/loss"]     = float(train_loss / cfg.train.grad_accum)
+        log_dict["perf/step_time"] = time.perf_counter() - start
+
+        if step % cfg.train.val_freq == 0 or step == n_steps - 1:
+            val_start = time.perf_counter()
+            val_metrics, val_key = run_validation_centralized(
+                loss_fn, forward_fn, variables,
+                val_ds, cfg.train.n_val_steps, val_key,
+            )
+            log_dict.update(val_metrics)
+            log_dict["perf/val_time"] = time.perf_counter() - val_start
+
+        if step % cfg.train.log_freq == 0 or step == n_steps - 1:
+            print(log_dict)
+            csv_log(logger, log_dict)
+            if cfg.train.logging == "wandb":
+                wandb.log(log_dict)
+
+        if step % cfg.train.save_freq == 0 or step == n_steps - 1:
+            utils.export.deploy(
+                dict(factory=lambda: variables,
+                     predict=ft.partial(cnn.apply, training=False)),
+                ckpt_variables,
+                dict(factory=(), predict=(variables, *x)),
+            )
+
+    return variables
+
+
+def train_fl(cfg, cnn, variables, clients, X_val, y_val,
+             ckpt_variables, key, mode, logger: CSVLogger):
+    """FedAvg training loop for fl_iid and fl_custom modes."""
+    fedjax_model = build_fedjax_model(cnn)
     client_summary(clients)
 
-    # ------------------------------------------------------------------
-    # FedAvg algorithm
-    # ------------------------------------------------------------------
     client_optimizer = fedjax.optimizers.sgd(cfg.data.client_lr, cfg.data.client_momentum)
     server_optimizer = fedjax.optimizers.adam(cfg.data.server_lr)
 
@@ -179,15 +283,117 @@ def main(cfg: DictConfig) -> None:
         ),
     )
 
+    input_dtype  = jnp.float32 if cfg.float else jnp.uint8
     sample_input = jnp.zeros(
-        (cfg.train.batch_size, cfg.train.seq_len, n_features), dtype=input_dtype
+        (cfg.train.batch_size, cfg.train.seq_len, N_FEATURES), dtype=input_dtype
     )
-    sample_batch = {
-        "x": sample_input,
-        "y": jnp.zeros((cfg.train.batch_size, cfg.train.seq_len), dtype=jnp.uint8),
-    }
-    init_params  = fedjax_model.init(init_key, sample_batch)
-    server_state = algorithm.init(init_params)
+    server_state    = algorithm.init(variables)
+    n_rounds        = int(cfg.data.n_rounds)
+    clients_per_rnd = int(cfg.data.clients_per_round)
+
+    for round_num in trange(n_rounds, desc=f"[{mode}] rounds"):
+        log_dict    = {"round": round_num}
+        round_start = time.perf_counter()
+
+        round_clients = sample_round(
+            clients,
+            n_per_round=clients_per_rnd,
+            round_num=round_num,
+            base_seed=cfg.train.seed,
+        )
+
+        server_state, client_diagnostics = algorithm.apply(server_state, round_clients)
+        log_dict["perf/round_time"] = time.perf_counter() - round_start
+
+        if client_diagnostics:
+            norms = [float(v["delta_l2_norm"]) for v in client_diagnostics.values()]
+            log_dict["train/mean_delta_l2_norm"] = float(np.mean(norms))
+            log_dict["train/max_delta_l2_norm"]  = float(np.max(norms))
+            log_dict["train/n_clients"]           = len(round_clients)
+
+        if round_num % cfg.train.val_freq == 0 or round_num == n_rounds - 1:
+            val_start   = time.perf_counter()
+            val_metrics = run_validation_fl(
+                fedjax_model.apply_for_eval,
+                server_state.params,
+                X_val, y_val,
+                n_val_steps=cfg.train.n_val_steps,
+                batch_size=cfg.train.batch_size,
+            )
+            log_dict.update(val_metrics)
+            log_dict["perf/val_time"] = time.perf_counter() - val_start
+
+        if round_num % cfg.train.log_freq == 0 or round_num == n_rounds - 1:
+            print(log_dict)
+            csv_log(logger, log_dict)
+            if cfg.train.logging == "wandb":
+                wandb.log(log_dict)
+
+        if round_num % cfg.train.save_freq == 0 or round_num == n_rounds - 1:
+            variables = server_state.params
+            utils.export.deploy(
+                dict(factory=lambda: variables,
+                     predict=ft.partial(cnn.apply, training=False)),
+                ckpt_variables,
+                dict(factory=(), predict=(variables, sample_input)),
+            )
+
+    return server_state.params
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+@hydra.main(version_base=None, config_path="configs/", config_name="cnn")
+def main(cfg: DictConfig) -> None:
+    input_dtype = jnp.float32 if cfg.float else jnp.uint8
+    mode        = cfg.data.mode
+
+    key      = jax.random.PRNGKey(cfg.train.seed)
+    init_key = jax.random.split(key, 1)[0]
+
+    # ------------------------------------------------------------------
+    # Model
+    # ------------------------------------------------------------------
+    cnn      = CNN(CNNConfig(**cfg.model))
+    init_x   = jnp.empty(
+        (cfg.train.batch_size, cfg.train.seq_len, N_FEATURES), dtype=input_dtype
+    )
+    variables = init(cnn, init_key, init_x, print_summary=True)
+
+    # ------------------------------------------------------------------
+    # Dataset loading + client construction
+    # ------------------------------------------------------------------
+    class_sampling = list(cfg.data.get("class_sampling", [0.01, 1, 3, 2, 2, 8]))
+
+    if mode == "centralized":
+        X_train, y_train, X_val, y_val = make_dataset(
+            script_path=cfg.data.dataset_path,
+            batch_size=cfg.train.seq_len,
+            seed=cfg.train.seed,
+            class_sampling=class_sampling,
+        )
+        clients = None   # not used in centralized path
+
+    elif mode == "fl_iid":
+        X_train, y_train, X_val, y_val = make_dataset(
+            script_path=cfg.data.dataset_path,
+            batch_size=cfg.train.seq_len,
+            seed=cfg.train.seed,
+            class_sampling=class_sampling,
+        )
+        clients, _, _ = build_clients(cfg, X_train, y_train)
+
+    elif mode == "fl_custom":
+        # build_clients loads each client's file and holds out val_fraction
+        # from every client, pooling those sequences into X_val / y_val.
+        # No dataset_path or val_path needed in the config.
+        clients, X_val, y_val = build_clients(cfg)
+        X_train = y_train = None   # not used
+
+    else:
+        raise ValueError(f"Unknown data.mode '{mode}'")
 
     # ------------------------------------------------------------------
     # Checkpointing & logging
@@ -211,70 +417,38 @@ def main(cfg: DictConfig) -> None:
             config=OmegaConf.to_container(cfg, resolve=True),
         )
 
-    n_rounds        = int(cfg.data.n_rounds)
-    clients_per_rnd = int(cfg.data.clients_per_round)
+    elif cfg.train.logging == "csv":
+        csv_path = os.path.join(ckpt_path, f"{mode}.csv")
+
+        # ------------------------------------------------------------------
+        # Dispatch
+        # ------------------------------------------------------------------
+        with CSVLogger(csv_path, make_fieldnames(mode)) as logger:
+            if mode == "centralized":
+                variables = train_centralized(
+                    cfg, cnn, variables, X_train, y_train, X_val, y_val,
+                    ckpt_variables, key, logger,
+                )
+            else:
+                variables = train_fl(
+                    cfg, cnn, variables, clients, X_val, y_val,
+                    ckpt_variables, key, mode, logger,
+                )
 
     # ------------------------------------------------------------------
-    # Training rounds
-    # ------------------------------------------------------------------
-    for round_num in trange(n_rounds, desc=f"[{mode}] rounds"):
-        log_dict    = {"round": round_num}
-        round_start = time.perf_counter()
-
-        # Sample clients for this round
-        round_clients = sample_round(
-            clients,
-            n_per_round=clients_per_rnd,
-            round_num=round_num,
-            base_seed=cfg.train.seed,
-        )
-
-        server_state, client_diagnostics = algorithm.apply(server_state, round_clients)
-        log_dict["perf/round_time"] = time.perf_counter() - round_start
-        # ---- Validation ---------------------------------------------
-        if round_num % cfg.train.val_freq == 0 or round_num == n_rounds - 1:
-            val_start   = time.perf_counter()
-            val_metrics = run_validation(
-                fedjax_model.apply_for_eval,
-                server_state.params,
-                X_val, y_val,
-                n_val_steps=cfg.train.n_val_steps,
-            )
-            log_dict.update(val_metrics)
-            log_dict["perf/val_time"] = time.perf_counter() - val_start
-
-        # ---- Logging ------------------------------------------------
-        if round_num % cfg.train.log_freq == 0 or round_num == n_rounds - 1:
-            print(log_dict)
-            if cfg.train.logging == "wandb":
-                wandb.log(log_dict)
-
-        # ---- Checkpoint ---------------------------------------------
-        if round_num % cfg.train.save_freq == 0 or round_num == n_rounds - 1:
-            variables = server_state.params
-            utils.export.deploy(
-                dict(
-                    factory=lambda: variables,
-                    predict=ft.partial(cnn.apply, training=False),
-                ),
-                ckpt_variables,
-                dict(factory=(), predict=(variables, sample_input)),
-            )
-
-    # ------------------------------------------------------------------
-    # Optional NPZ dump
+    # Optional NPZ dump  (outside logger context — logger already closed)
     # ------------------------------------------------------------------
     if cfg.save_npz:
-        variables = server_state.params
+        forward_fn = jax.jit(ft.partial(forward, cnn))
         y_label, y_pred_list = [], []
         for x, y in zip(X_val, y_val):
-            batch  = {"x": jnp.expand_dims(x, 0), "y": jnp.expand_dims(y, 0)}
-            logits = fedjax_model.apply_for_eval(variables, batch)
+            pred, _ = forward_fn(variables, jax.random.PRNGKey(0),
+                                 jnp.expand_dims(x, 0))
             y_label.append(np.array(y))
-            y_pred_list.append(np.array(logits))
+            y_pred_list.append(np.array(pred))
 
         np.savez_compressed(
-            f"cnn_dilstm_{mode}.npz",
+            f"cnn_{mode}.npz",
             labels=np.array(y_label),
             rnn_outputs=np.array(y_pred_list),
         )

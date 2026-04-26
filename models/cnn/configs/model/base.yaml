@@ -1,4 +1,4 @@
-cnn_dims: [128, 128, 128, 64]
-cnn_ker_szs: [3, 3, 3, 5]
-drop_rate: 0.0
+cnn_dims: [64, 48, 32, 16]
+cnn_ker_szs: [7, 5, 3, 3]
+drop_rate: 0.2
 dtype: "bfloat16"
