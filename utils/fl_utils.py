@@ -110,86 +110,39 @@ def make_iid_clients(
 # Mode: fl_custom
 # ---------------------------------------------------------------------------
 
-def make_custom_clients(
-    client_cfgs: Sequence[DictConfig],
-    seq_len: int,
-    seed: int,
-    class_sampling: List[float],
-    val_fraction: float = 0.2,
-) -> Tuple[List[FLClient], List[np.ndarray], List[np.ndarray]]:
-    """
-    Load each client's dataset from an independent file, then hold out
-    val_fraction of every client's sequences into a shared validation pool.
-
-    The split is done after make_dataset so the class_sampling weights apply
-    to the full file first; the val split is then a random stratified slice
-    of the resulting sequences.
-
-    Each entry in client_cfgs must have:
-        id    (int) – unique client identifier
-        path  (str) – path accepted by make_dataset's script_path argument
-
-    Optionally per-client:
-        class_sampling  (list[float]) – overrides global class_sampling
-        seq_len         (int)         – overrides global seq_len
-        val_fraction    (float)       – overrides global val_fraction
-
-    Returns:
-        clients  – List[FLClient] with training data only
-        X_val    – list of val sequences pooled from all clients
-        y_val    – corresponding labels
-    """
-    clients: List[FLClient] = []
-    X_val_pool: List[np.ndarray] = []
-    y_val_pool: List[np.ndarray] = []
+def make_custom_clients(client_cfgs, seq_len, seed, class_sampling, val_fraction=0.2):
+    clients    = []
+    X_val_pool = []
+    y_val_pool = []
 
     rng = np.random.default_rng(seed)
 
     for spec in client_cfgs:
         client_class_sampling = list(spec.get("class_sampling", class_sampling))
         client_seq_len        = int(spec.get("seq_len", seq_len))
-        client_val_frac       = float(spec.get("val_fraction", val_fraction))
 
-        X, y, _, _ = make_dataset(
+        # Use make_dataset's own split — X_val is a proper holdout
+        X_train, y_train, X_val, y_val = make_dataset(
             script_path=str(spec.path),
             batch_size=client_seq_len,
             seed=seed,
             class_sampling=client_class_sampling,
         )
 
-        all_x = np.stack(X)   # (N, seq_len, n_features)
-        all_y = np.stack(y)   # (N, seq_len)
-        N     = len(all_x)
-
-        # Reproducible shuffle then split
-        perm      = rng.permutation(N)
-        n_val     = max(1, int(N * client_val_frac))
-        val_idx   = perm[:n_val]
-        train_idx = perm[n_val:]
-
-        X_val_pool.extend(all_x[val_idx])
-        y_val_pool.extend(all_y[val_idx])
+        # Pool the proper val splits across clients
+        X_val_pool.extend(X_val)
+        y_val_pool.extend(y_val)
 
         client = FLClient(
             client_id=int(spec.id),
             dataset=fedjax.ClientDataset({
-                "x": all_x[train_idx],
-                "y": all_y[train_idx],
+                "x": np.stack(X_train),
+                "y": np.stack(y_train),
             }),
         )
         clients.append(client)
 
-        log.info(
-            "Custom client %d: %d train / %d val sequences from '%s'.",
-            client.client_id, len(train_idx), n_val, spec.path,
-        )
-
-    log.info("Shared val pool: %d sequences from %d clients.",
-             len(X_val_pool), len(clients))
-
     return clients, X_val_pool, y_val_pool
-
-
 # ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
