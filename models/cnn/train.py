@@ -28,7 +28,7 @@ from utils.lib5gpl2_utils import make_dataset
 from utils.fl_utils import build_clients, client_summary, sample_round
 
 N_FEATURES = 33
-N_CLASSES  = 6
+N_CLASSES  = 7
 
 
 # ---------------------------------------------------------------------------

@@ -10,10 +10,10 @@ mode: centralized
 
 dataset_path: "/home/filip/projects/fedhetnet/datasets/awid3_ds.sh"
 
-class_sampling: [1, 1, 1, 1, 1, 1, 0]
+class_sampling: [1, 1, 1, 1, 1, 1, 1]
 
 # ── Schedule ──────────────────────────────────────────────────────────────
-n_rounds: 2000 # equivalent to train.n_steps in the original script
+n_rounds: 20000 # equivalent to train.n_steps in the original script
 
 # ── Optimisers ────────────────────────────────────────────────────────────
 # server_lr is effectively unused because there is only one client (no

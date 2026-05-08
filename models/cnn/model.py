@@ -20,7 +20,7 @@ class CNNConfig:
 class CNN(nn.Module):
     config: CNNConfig
     @nn.compact
-    def __call__(self, x, training=True, n_classes=6):
+    def __call__(self, x, training=True, n_classes=7):
 
         for n_features, kernel_size in zip(self.config.cnn_dims, self.config.cnn_ker_szs):
             x = nn.BatchNorm(use_running_average=not training)(x)

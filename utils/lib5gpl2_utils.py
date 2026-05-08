@@ -10,14 +10,16 @@ from sklearn.model_selection import train_test_split
 from lib5gpl2 import lib5gpl2py
 
 from utils.data.dataloader import CLASS_SAMPLING
+N_FEATURES = 33
 
-def read_labeling_from_script(script_path: str) -> dict[str: lib5gpl2py.LabelingRules]:
+def read_labeling_from_script(script_path: str) -> tuple[dict[str: lib5gpl2py.LabelingRules], list[str]]:
     with open(script_path) as f:
         awid3_dir = ""
         pcaps_f_dir = ""
         pcaps_inz_dir = ""
         pcaps_3gpp_dir = ""
         rules = dict()
+        np_files = []
 
         for line in f:
             if line.startswith("$writer"):
@@ -66,7 +68,16 @@ def read_labeling_from_script(script_path: str) -> dict[str: lib5gpl2py.Labeling
                     rules[source_pcap] = lr
                 else:
                     logging.error(f"Invalid labeling rules for file {source_pcap}")
-
+            elif line.startswith("# read_numpy"):
+                p = line.split(' ')[-1].removesuffix('\n')
+                if os.path.isdir(p):
+                    for f in os.listdir(p):
+                        if f.endswith('.npz'):
+                            np_files.append(os.path.join(p, f))
+                elif os.path.isfile(p):
+                    np_files.append(p)
+                else:
+                    print(f"Bad .npz path: {p}")
             elif line.startswith("awid3_dir"):
                 awid3_dir = line.split('"')[1]
             elif line.startswith("pcaps_f_dir"):
@@ -75,7 +86,8 @@ def read_labeling_from_script(script_path: str) -> dict[str: lib5gpl2py.Labeling
                 pcaps_inz_dir = line.split('"')[1]
             elif line.startswith("pcaps_3gpp_dir"):
                 pcaps_3gpp_dir = line.split('"')[1]
-        return rules
+        print(f"Input pcap files: {len(rules)}, npz files: {len(np_files)}")
+        return rules, np_files
 
 
 def print_labeling(lr: lib5gpl2py.LabelingRules) -> None:
@@ -100,7 +112,8 @@ def make_dataset(
         buffer_size: int = int(5e6),
         float_tokenization: bool = True,
         normal_only: bool = False,
-        split: float = 0.8
+        split: float = 0.8,
+        n_features : int = N_FEATURES
 ) -> tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray], list[np.ndarray]]:
     n_classes = len(class_sampling)
 
@@ -109,7 +122,7 @@ def make_dataset(
     if (split < 0 or split > 1):
         raise Exception("split should be in range (0, 1)")
 
-    labeling_rules = read_labeling_from_script(script_path)
+    labeling_rules, np_files = read_labeling_from_script(script_path)
     tokens_by_class = [list() for _ in range(n_classes)]
     labels_by_class = [list() for _ in range(n_classes)]
 
@@ -123,6 +136,23 @@ def make_dataset(
                 if not normal_only or sample_class == 0:
                     tokens_by_class[sample_class].append(_tokens)
                     labels_by_class[sample_class].append(_labels)
+
+    for np_file in np_files:
+        data = np.load(np_file)
+        X, y = data['X'], data['y']
+        if y.ndim == 1:
+            n_batches = len(y) // batch_size
+
+            X = X[: n_batches * batch_size].reshape(-1, batch_size, n_features)
+            y = y[: n_batches * batch_size].reshape(-1, batch_size)
+        for _tokens, _labels in zip(X, y):
+            sample_class = np.max(_labels)
+
+            if not normal_only or sample_class == 0:
+                tokens_by_class[sample_class].append(_tokens)
+                labels_by_class[sample_class].append(_labels)
+
+
 
     X_train, Y_train, X_test, Y_test = list(), list(), list(), list()
     for c in range(n_classes):
@@ -163,7 +193,7 @@ def make_dataset(
 
 
 if __name__ == '__main__':
-    rules = read_labeling_from_script('scripts/make_ds_npz.sh')
+    rules, _ = read_labeling_from_script('scripts/make_ds_npz.sh')
 
     for file, lr in rules.items():
         print(f"File: {file}")

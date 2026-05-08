@@ -275,11 +275,14 @@ def convert_to_features(df: pd.DataFrame) -> tuple[pd.DataFrame, list[int]]:
     return features, labels
 
 
-def save_to_npz(filepath: str, features: pd.DataFrame, labels: list[int]) -> None:
+def save_to_npz(filepath: str, features: pd.DataFrame, labels: list[int], compressed = True) -> None:
     X = features.to_numpy()
     y = np.array(labels)
 
-    np.savez(filepath, X=X, y=y)
+    if compressed:
+        np.savez_compressed(filepath, X=X, y=y)
+    else:
+        np.savez(filepath, X=X, y=y)
 
 
 def process_awid2_csv(filepath: str, dest_dir: str) -> None:

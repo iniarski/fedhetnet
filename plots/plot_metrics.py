@@ -14,9 +14,9 @@ import pandas as pd
 # ===========================================================================
 
 RUNS: dict[str, str] = {
-    "Centralized": "/home/filip/projects/fedhetnet/runs/cnn_base/2026-04-26/19-32-09/centralized.csv",
-    "FL-IID":      "/home/filip/projects/fedhetnet/runs/cnn_base/2026-04-26/19-34-47/fl_iid.csv",
-    "FL-Heterogeneous":   "/home/filip/projects/fedhetnet/runs/cnn_base/2026-04-26/19-53-50/fl_custom.csv",
+    "Centralized": "/home/filip/mgr_csv/centralized.csv",
+    "FL-IID":      "/home/filip/mgr_csv/fl_iid.csv",
+    "FL-Heterogeneous":   "/home/filip/mgr_csv/fl_custom.csv",
 }
 
 METRICS: list[str] = [
