@@ -4,6 +4,7 @@ defaults:
   - optimizer: adamw
   - train: base
   - data: fl_iid
+  - algorithm: fed_avg
 float: True
 name: cnn_base
 save_npz: False

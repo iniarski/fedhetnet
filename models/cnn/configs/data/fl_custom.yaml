@@ -11,7 +11,7 @@ mode: fl_custom
 
 # Validation data (shared, centralised evaluati
 
-class_sampling: [1, 1, 1, 1, 1, 1, 0] # default; overridable per client
+class_sampling: [1, 1, 1, 1, 1, 1, 1] # default; overridable per client
 
 # ── Client definitions ────────────────────────────────────────────────────
 clients:
@@ -31,13 +31,9 @@ clients:
     path: "/home/winiarski/fedhetnet/datasets/awid2_r_tst.sh"
 
 # ── Topology ──────────────────────────────────────────────────────────────
-clients_per_round: 2 # clients sampled per round
+clients_per_round: 3 # clients sampled per round
 
 # ── Schedule ──────────────────────────────────────────────────────────────
-n_rounds: 2000
-local_epochs: 1 # more local epochs often beneficial for heterogeneous data
-
-# ── Optimisers ────────────────────────────────────────────────────────────
-client_lr: 0.01
-client_momentum: 0.9
-server_lr: 0.001
+n_rounds: 500
+val_freq: 10
+local_epochs: 1

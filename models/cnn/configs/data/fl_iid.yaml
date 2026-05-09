@@ -10,14 +10,15 @@ mode: fl_iid
 
 dataset_path: "/home/winiarski/fedhetnet/datasets/full_ds.sh"
 
-class_sampling: [1, 1, 1, 1, 1, 1, 0]
+class_sampling: [1, 1, 1, 1, 1, 1, 1]
 
 # ── Topology ──────────────────────────────────────────────────────────────
 n_clients: 10
 clients_per_round: 3
 
 # ── Schedule ──────────────────────────────────────────────────────────────
-n_rounds: 2000
+n_rounds: 500
+val_freq: 10
 local_epochs: 1 # local SGD epochs each selected client runs
 
 # ── Optimisers ────────────────────────────────────────────────────────────
