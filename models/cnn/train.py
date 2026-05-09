@@ -238,7 +238,7 @@ def train_centralized(cfg, cnn, variables, X_train, y_train, X_val, y_val,
         log_dict["train/loss"]     = float(train_loss / cfg.train.grad_accum)
         log_dict["perf/step_time"] = time.perf_counter() - start
 
-        if step % cfg.train.val_freq == 0 or step == n_steps - 1:
+        if step % cfg.data.val_freq == 0 or step == n_steps - 1:
             val_start = time.perf_counter()
             val_metrics, val_key = run_validation_centralized(
                 loss_fn, forward_fn, variables,
@@ -247,7 +247,7 @@ def train_centralized(cfg, cnn, variables, X_train, y_train, X_val, y_val,
             log_dict.update(val_metrics)
             log_dict["perf/val_time"] = time.perf_counter() - val_start
 
-        if step % cfg.train.log_freq == 0 or step == n_steps - 1:
+        if step % cfg.data.val_freq == 0 or step == n_steps - 1:
             print(log_dict)
             csv_log(logger, log_dict)
             if cfg.train.logging == "wandb":
@@ -266,22 +266,48 @@ def train_centralized(cfg, cnn, variables, X_train, y_train, X_val, y_val,
 
 def train_fl(cfg, cnn, variables, clients, X_val, y_val,
              ckpt_variables, key, mode, logger: CSVLogger):
-    """FedAvg training loop for fl_iid and fl_custom modes."""
     fedjax_model = build_fedjax_model(cnn)
     client_summary(clients)
 
-    client_optimizer = fedjax.optimizers.sgd(cfg.data.client_lr, cfg.data.client_momentum)
-    server_optimizer = fedjax.optimizers.adam(cfg.data.server_lr)
+    client_optimizer = fedjax.optimizers.adam(cfg.algorithm.client_lr,)
+    server_optimizer = fedjax.optimizers.adam(cfg.algorithm.server_lr)
+    algorithm = None
 
-    algorithm = fedjax.algorithms.fed_avg.federated_averaging(
-        grad_fn=fedjax.model_grad(fedjax_model),
-        client_optimizer=client_optimizer,
-        server_optimizer=server_optimizer,
-        client_batch_hparams=fedjax.ShuffleRepeatBatchHParams(
-            batch_size=cfg.train.batch_size,
-            num_epochs=cfg.data.local_epochs,
-        ),
-    )
+    if cfg.algorithm.name == 'fed_avg':
+
+        algorithm = fedjax.algorithms.fed_avg.federated_averaging(
+            grad_fn=fedjax.model_grad(fedjax_model),
+            client_optimizer=client_optimizer,
+            server_optimizer=server_optimizer,
+            client_batch_hparams=fedjax.ShuffleRepeatBatchHParams(
+                batch_size=cfg.train.batch_size,
+                num_epochs=cfg.data.local_epochs,
+            ),
+        )
+    elif cfg.algorithm.name == 'fed_prox':
+
+        def per_example_loss(params, batch, rng):
+            logits, _ = forward(cnn, params, rng, batch["x"])
+            y         = batch["y"]
+            probs     = jax.nn.softmax(logits, axis=-1)
+            ohe       = jax.nn.one_hot(y, num_classes=N_CLASSES)
+            p_t       = jnp.sum(ohe * probs, axis=-1)
+            gamma, eps = 2.0, 1e-7
+            return (1 - p_t) ** gamma * -jnp.log(p_t + eps)   # (B, T) — no mean
+
+        algorithm = fedjax.algorithms.fed_prox.fed_prox(
+            per_example_loss=per_example_loss,
+            client_optimizer=client_optimizer,
+            server_optimizer=server_optimizer,
+            client_batch_hparams=fedjax.ShuffleRepeatBatchHParams(
+                batch_size=cfg.train.batch_size,
+                num_epochs=cfg.data.local_epochs,
+            ),
+            proximal_weight=cfg.algorithm.proximal_weight,   # mu — 0.0 == FedAvg
+        )
+
+    else:
+        raise ValueError(f"Bad algorithm: {cfg.algorithm}")
 
     input_dtype  = jnp.float32 if cfg.float else jnp.uint8
     sample_input = jnp.zeros(
@@ -311,7 +337,7 @@ def train_fl(cfg, cnn, variables, clients, X_val, y_val,
             log_dict["train/max_delta_l2_norm"]  = float(np.max(norms))
             log_dict["train/n_clients"]           = len(round_clients)
 
-        if round_num % cfg.train.val_freq == 0 or round_num == n_rounds - 1:
+        if round_num % cfg.data.val_freq == 0 or round_num == n_rounds - 1:
             val_start   = time.perf_counter()
             val_metrics = run_validation_fl(
                 fedjax_model.apply_for_eval,
@@ -323,7 +349,7 @@ def train_fl(cfg, cnn, variables, clients, X_val, y_val,
             log_dict.update(val_metrics)
             log_dict["perf/val_time"] = time.perf_counter() - val_start
 
-        if round_num % cfg.train.log_freq == 0 or round_num == n_rounds - 1:
+        if round_num % cfg.data.val_freq == 0 or round_num == n_rounds - 1:
             print(log_dict)
             csv_log(logger, log_dict)
             if cfg.train.logging == "wandb":
