@@ -16,11 +16,19 @@ class_sampling: [1, 1, 1, 1, 1, 1, 0] # default; overridable per client
 # ── Client definitions ────────────────────────────────────────────────────
 clients:
   - id: 0
-    path: "/home/filip/projects/fedhetnet/datasets/awid3_ds_split1.sh"
+    path: "/home/winiarski/fedhetnet/datasets/awid3_ds.sh"
   - id: 1
-    path: "/home/filip/projects/fedhetnet/datasets/awid3_ds_split2.sh"
+    path: "/home/winiarski/fedhetnet/datasets/f_ds.sh"
   - id: 2
-    path: "/home/filip/projects/fedhetnet/datasets/awid3_ds_split3.sh"
+    path: "/home/winiarski/fedhetnet/datasets/inz_ds.sh"
+  - id: 3
+    path: "/home/winiarski/fedhetnet/datasets/awid2_f_trn.sh"
+  - id: 4
+    path: "/home/winiarski/fedhetnet/datasets/awid2_f_tst.sh"
+  - id: 5
+    path: "/home/winiarski/fedhetnet/datasets/awid2_r_trn.sh"
+  - id: 6
+    path: "/home/winiarski/fedhetnet/datasets/awid2_r_tst.sh"
 
 # ── Topology ──────────────────────────────────────────────────────────────
 clients_per_round: 2 # clients sampled per round

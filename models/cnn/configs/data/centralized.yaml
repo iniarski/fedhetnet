@@ -8,7 +8,7 @@
 
 mode: centralized
 
-dataset_path: "/home/filip/projects/fedhetnet/datasets/awid3_ds.sh"
+dataset_path: "/home/winiarski/fedhetnet/datasets/full_ds.sh"
 
 class_sampling: [1, 1, 1, 1, 1, 1, 1]
 

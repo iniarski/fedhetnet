@@ -1,7 +1,8 @@
 #! /bin/bash
 
 target_dir="/mnt/vol1/pcaps/dataset_v2/npz/"
-awid3_dir="/mnt/vol1/pcaps/AWID3"
+awid3_dir="/mnt/shared/awids/AWID3_Dataset/pcaps/"
+# awid3_dir="/mnt/vol1/pcaps/AWID3"
 pcaps_f_dir="/mnt/vol1/pcaps/pcaps_f/"
 pcaps_inz_dir="/mnt/vol1/pcaps/pcaps_inz/"
 
@@ -20,5 +21,3 @@ $writer -i "${awid3_dir}7. Evil_Twin.pcap" -z "${target_dir}awid3_evil_twin.npz"
 # $writer -i "${awid3_dir}10. Malware_decrypted.pcap" -z "${target_dir}awid3_malware.npz" -r -l 4 -f "(ip host 192.168.2.248 || ip host 192.168.2.42 || ip host 192.168.2.73 || ip host 192.168.2.41 || ip host 192.168.2.254 || ip host 192.168.2.184 || ip host 192.168.2.190) && ip host 192.168.2.130" -s 1484772 -e 2589042
 # $writer -i "${awid3_dir}12. Botnet_dtshark -r ecrypted.pcap" -z "${target_dir}awid3_botnet.npz" -r -l 4 -f "ip host 192.168.2.248 && (ip host 192.168.2.130 || ip host 192.168.2.1 || ip host 192.168.2.125 || ip host 192.168.2.42 || ip host 192.168.2.184 || ip host 192.168.2.73)" -s 1135096 -e 3325479
 # $writer -i "${awid3_dir}13. Website_spoofing_decrypted.pcap" -z "${target_dir}awid3_website_spoofing.npz" -r -l 4 -f "(wlan src 04:ed:33:e0:24:82 || wlan dst 04:ed:33:e0:24:82 || wlan src 00:C0:CA:A8:29:56 || wlan dst 00:C0:CA:A8:29:56 || wlan src 24:F5:A2:EA:86:C3 || wlan dst 24:F5:A2:EA:86:C3 || wlan src 00:C0:CA:A8:26:3E || wlan dst 00:C0:CA:A8:26:3E) && (wlan subtype data || wlan subtype qos-data)" -s 16409 -e 2668582
-
-# read_numpy /mnt/vol1/datasets/awid2/npz/rtrn/1.npz
