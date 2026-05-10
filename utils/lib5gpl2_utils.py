@@ -113,78 +113,78 @@ def make_dataset(
         float_tokenization: bool = True,
         normal_only: bool = False,
         split: float = 0.8,
-        n_features : int = N_FEATURES
+        n_features: int = N_FEATURES
 ) -> tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray], list[np.ndarray]]:
     n_classes = len(class_sampling)
-
     if any(x < 0 for x in class_sampling):
         raise Exception("Expected all elements of class sampling to be positive")
-    if (split < 0 or split > 1):
+    if split < 0 or split > 1:
         raise Exception("split should be in range (0, 1)")
 
     labeling_rules, np_files = read_labeling_from_script(script_path)
-    tokens_by_class = [list() for _ in range(n_classes)]
-    labels_by_class = [list() for _ in range(n_classes)]
+    X_train, Y_train, X_test, Y_test = list(), list(), list(), list()
+
+    def _sample_and_accumulate(tokens_by_class, labels_by_class):
+        """Split and apply class sampling on one file's worth of data, then extend the output lists."""
+        for c in range(n_classes):
+            if len(tokens_by_class[c]) == 0:
+                continue
+            tokens = tokens_by_class[c]
+            labels = labels_by_class[c]
+            x_train, x_test, y_train, y_test = train_test_split(
+                tokens, labels, train_size=split, random_state=seed, shuffle=False
+            )
+            X_test.extend(x_test)
+            Y_test.extend(y_test)
+            sampling = class_sampling[c]
+            repeats, rest = int(sampling), int(len(x_train) * sampling % 1)
+            x_train_sampled = repeats * x_train
+            y_train_sampled = repeats * y_train
+            if rest > 0:
+                idx = list(range(len(x_train)))
+                random.Random(seed).shuffle(idx)
+                x_train_sampled.extend([x_train[i] for i in idx[:rest]])
+                y_train_sampled.extend([y_train[i] for i in idx[:rest]])
+            X_train.extend(x_train_sampled)
+            Y_train.extend(y_train_sampled)
 
     for file, labeling in labeling_rules.items():
+        tokens_by_class = [list() for _ in range(n_classes)]
+        labels_by_class = [list() for _ in range(n_classes)]
         with lib5gpl2py.LabeledCapture(
-            file, batch_size, labeling, buffer_size=buffer_size, live_capture=False, float_tokenization=float_tokenization
+            file, batch_size, labeling, buffer_size=buffer_size,
+            live_capture=False, float_tokenization=float_tokenization
         ) as cap:
             for _tokens, _labels, _ in cap:
                 sample_class = np.max(_labels)
-
                 if not normal_only or sample_class == 0:
                     tokens_by_class[sample_class].append(_tokens)
                     labels_by_class[sample_class].append(_labels)
+        _sample_and_accumulate(tokens_by_class, labels_by_class)
 
     for np_file in np_files:
+        tokens_by_class = [list() for _ in range(n_classes)]
+        labels_by_class = [list() for _ in range(n_classes)]
         data = np.load(np_file)
         X, y = data['X'], data['y']
         if y.ndim == 1:
             n_batches = len(y) // batch_size
-
             X = X[: n_batches * batch_size].reshape(-1, batch_size, n_features)
             y = y[: n_batches * batch_size].reshape(-1, batch_size)
         for _tokens, _labels in zip(X, y):
             sample_class = np.max(_labels)
-
             if not normal_only or sample_class == 0:
                 tokens_by_class[sample_class].append(_tokens)
                 labels_by_class[sample_class].append(_labels)
-
-
-
-    X_train, Y_train, X_test, Y_test = list(), list(), list(), list()
-    for c in range(n_classes):
-        if len(tokens_by_class[c]) == 0:
-            continue
-
-        tokens = tokens_by_class[c]
-        labels = labels_by_class[c]
-        x_train, x_test, y_train, y_test = train_test_split(tokens, labels, train_size=split, random_state=seed, shuffle=False)
-        X_test.extend(x_test)
-        Y_test.extend(y_test)
-
-        sampling = class_sampling[c]
-        repeats, rest = int(sampling), int(len(x_train) * sampling % 1)
-        x_train_sampled, y_train_sampled = repeats * x_train, repeats * y_train
-
-        if rest > 0:
-            idx = list(range(len(x_train)))
-            random.Random(seed).shuffle(idx)
-            x_train_sampled.extend([x_train[i] for i in idx[:rest]])
-            y_train_sampled.extend([y_train[i] for i in idx[:rest]])
-
-        X_train.extend(x_train_sampled)
-        Y_train.extend(y_train_sampled)
+        _sample_and_accumulate(tokens_by_class, labels_by_class)
+        del data, X, y  # explicitly release the mmap/array
 
     if shuffle:
-        idx = list(range(len(x_train)))
+        idx = list(range(len(X_train)))
         random.Random(seed).shuffle(idx)
         X_train = [X_train[i] for i in idx]
         Y_train = [Y_train[i] for i in idx]
-
-        idx = list(range(len(x_test)))
+        idx = list(range(len(X_test)))
         random.Random(seed + 1).shuffle(idx)
         X_test = [X_test[i] for i in idx]
         Y_test = [Y_test[i] for i in idx]

@@ -10,7 +10,7 @@ mode: fl_iid
 
 dataset_path: "/home/winiarski/fedhetnet/datasets/full_ds.sh"
 
-class_sampling: [1, 1, 1, 1, 1, 1, 1]
+class_sampling: [0.1, 1, 1, 1, 1, 1, 1]
 
 # ── Topology ──────────────────────────────────────────────────────────────
 n_clients: 10

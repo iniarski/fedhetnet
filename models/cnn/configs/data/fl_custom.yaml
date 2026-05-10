@@ -11,7 +11,7 @@ mode: fl_custom
 
 # Validation data (shared, centralised evaluati
 
-class_sampling: [1, 1, 1, 1, 1, 1, 1] # default; overridable per client
+class_sampling: [0.1, 1, 1, 1, 1, 1, 1] # default; overridable per client
 
 # ── Client definitions ────────────────────────────────────────────────────
 clients:
