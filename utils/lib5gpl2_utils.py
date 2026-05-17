@@ -131,13 +131,16 @@ def make_dataset(
                 continue
             tokens = tokens_by_class[c]
             labels = labels_by_class[c]
-            x_train, x_test, y_train, y_test = train_test_split(
-                tokens, labels, train_size=split, random_state=seed, shuffle=False
-            )
+            if len(tokens) == 1:
+                x_train, x_test, y_train, y_test = tokens, [], labels, []
+            else:
+                x_train, x_test, y_train, y_test = train_test_split(
+                    tokens, labels, train_size=split, random_state=seed, shuffle=False
+                )
             X_test.extend(x_test)
             Y_test.extend(y_test)
             sampling = class_sampling[c]
-            repeats, rest = int(sampling), int(len(x_train) * sampling % 1)
+            repeats, rest = int(sampling), int(len(x_train) * sampling)
             x_train_sampled = repeats * x_train
             y_train_sampled = repeats * y_train
             if rest > 0:
@@ -147,6 +150,10 @@ def make_dataset(
                 y_train_sampled.extend([y_train[i] for i in idx[:rest]])
             X_train.extend(x_train_sampled)
             Y_train.extend(y_train_sampled)
+    print("Processing pcap files")
+
+    f16_max = np.finfo(np.float16).max
+
 
     for file, labeling in labeling_rules.items():
         tokens_by_class = [list() for _ in range(n_classes)]
@@ -156,28 +163,97 @@ def make_dataset(
             live_capture=False, float_tokenization=float_tokenization
         ) as cap:
             for _tokens, _labels, _ in cap:
+                if float_tokenization:
+                    _tokens = np.clip(_tokens, -f16_max, f16_max).astype(np.float16)
                 sample_class = np.max(_labels)
                 if not normal_only or sample_class == 0:
                     tokens_by_class[sample_class].append(_tokens)
                     labels_by_class[sample_class].append(_labels)
         _sample_and_accumulate(tokens_by_class, labels_by_class)
 
+    print("Finished processing pcap files, moving onto numpy")
+    
+    def _sample_and_accumulate_numpy(tokens_by_class, labels_by_class):
+        for c in range(n_classes):
+            if len(tokens_by_class[c]) == 0:
+                continue
+            tokens = tokens_by_class[c]
+            labels = labels_by_class[c]
+            if len(tokens) == 1:
+                x_train, x_test, y_train, y_test = tokens, tokens[:0], labels, labels[:0]
+            else:
+                x_train, x_test, y_train, y_test = train_test_split(
+                    tokens, labels, train_size=split, random_state=seed, shuffle=False
+                )
+            X_test.extend(x_test)
+            Y_test.extend(y_test)
+
+            sampling = class_sampling[c]
+            repeats, rest = int(sampling), int(len(x_train) * (sampling % 1))
+
+            # np.tile replaces list multiplication (repeats * x_train)
+            tile_dims = (repeats,) + (1,) * (x_train.ndim - 1)
+            x_train_sampled = np.tile(x_train, tile_dims)
+            y_train_sampled = np.tile(y_train, (repeats,) + (1,) * (y_train.ndim - 1))
+
+            if rest > 0:
+                idx = list(range(len(x_train)))
+                random.Random(seed).shuffle(idx)
+                # np.concatenate replaces .extend on the sampled arrays
+                x_train_sampled = np.concatenate([x_train_sampled, x_train[idx[:rest]]])
+                y_train_sampled = np.concatenate([y_train_sampled, y_train[idx[:rest]]])
+
+            # .extend on the outer lists still works — numpy iterates over axis 0
+            X_train.extend(x_train_sampled)
+            Y_train.extend(y_train_sampled)
+
     for np_file in np_files:
-        tokens_by_class = [list() for _ in range(n_classes)]
-        labels_by_class = [list() for _ in range(n_classes)]
-        data = np.load(np_file)
+        data = np.load(np_file, mmap_mode='r')
         X, y = data['X'], data['y']
         if y.ndim == 1:
             n_batches = len(y) // batch_size
-            X = X[: n_batches * batch_size].reshape(-1, batch_size, n_features)
-            y = y[: n_batches * batch_size].reshape(-1, batch_size)
-        for _tokens, _labels in zip(X, y):
+        else:
+            n_batches = len(y)
+
+        # --- first pass: count batches per class (no data loaded) ---
+        class_counts = np.zeros(n_classes, dtype=np.int64)
+        for i in range(n_batches):
+            _labels = y[i] if y.ndim == 2 else y[i*batch_size:(i+1)*batch_size]
             sample_class = np.max(_labels)
             if not normal_only or sample_class == 0:
-                tokens_by_class[sample_class].append(_tokens)
-                labels_by_class[sample_class].append(_labels)
-        _sample_and_accumulate(tokens_by_class, labels_by_class)
-        del data, X, y  # explicitly release the mmap/array
+                class_counts[sample_class] += 1
+
+        # --- pre-allocate one contiguous array per class ---
+        tokens_by_class = [
+            np.empty((class_counts[c], batch_size, n_features), dtype=X.dtype)
+            for c in range(n_classes)
+        ]
+        labels_by_class = [
+            np.empty((class_counts[c], batch_size), dtype=y.dtype)
+            for c in range(n_classes)
+        ]
+        fill_idx = np.zeros(n_classes, dtype=np.int64)
+
+        # --- second pass: fill pre-allocated arrays ---
+        for i in range(n_batches):
+            if y.ndim == 2:
+                _tokens, _labels = X[i], y[i]
+            else:
+                _tokens = X[i*batch_size:(i+1)*batch_size]
+                _labels = y[i*batch_size:(i+1)*batch_size]
+            sample_class = np.max(_labels)
+            if not normal_only or sample_class == 0:
+                slot = fill_idx[sample_class]
+                tokens_by_class[sample_class][slot] = _tokens  # copy into pre-alloc'd buffer
+                labels_by_class[sample_class][slot] = _labels
+                fill_idx[sample_class] += 1
+
+        del data, X, y  # release mmap
+        _sample_and_accumulate_numpy(tokens_by_class, labels_by_class)
+
+    print("Finished processing numpy files")
+    print(f"Train size: {len(X_train)}")
+    print(f"Test size: {len(X_test)}")
 
     if shuffle:
         idx = list(range(len(X_train)))

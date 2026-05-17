@@ -1,5 +1,5 @@
 name: fed_prox
-client_lr: 0.01
+client_lr: 0.001
 client_momentum: 0.9
 server_lr: 0.001
-proximal_weight: 0.01
+proximal_weight: 0.1

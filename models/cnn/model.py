@@ -26,6 +26,7 @@ class CNN(nn.Module):
             x = nn.BatchNorm(use_running_average=not training)(x)
             x = nn.Conv(features=n_features, kernel_size=(kernel_size,), padding='SAME')(x)
             x = nn.gelu(x)
+        #    x = nn.max_pool(x, (3,))
             x = nn.Dropout(self.config.drop_rate)(x, deterministic=not training)
 
         x = nn.BatchNorm(use_running_average=not training)(x)

@@ -6,7 +6,6 @@ echo pcaps_f normal;
 
 $writer -i "${pcaps_f_dir}real01.pcap" -z "${target_dir}real01.npz" -r -n
 $writer -i "${pcaps_f_dir}real10.pcap" -z "${target_dir}real10.npz" -r -n
-$writer -i "${pcaps_f_dir}real15.pcap" -z "${target_dir}real15.npz" -r -n
 $writer -i "${pcaps_f_dir}real30.pcap" -z "${target_dir}real30.npz" -r -n
 $writer -i "${pcaps_f_dir}real40.pcap" -z "${target_dir}real40.npz" -r -n
 

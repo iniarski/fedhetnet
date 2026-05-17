@@ -78,7 +78,6 @@ def csv_log(logger: CSVLogger, log_dict: dict) -> None:
 
 def focal_loss_fn(model, variables, key, x, y,
                   gamma: float = 2.0, eps: float = 1e-7):
-    """Centralised signature: (model, variables, key, x, y) → (scalar, state)."""
     logits, state = forward(model, variables, key, *x)
     probs    = jax.nn.softmax(logits, axis=-1)
     ohe      = jax.nn.one_hot(y, num_classes=N_CLASSES)
@@ -120,10 +119,6 @@ def run_validation_centralized(loss_fn, forward_fn, variables,
 
 def run_validation_fl(apply_for_eval, variables, X_val, y_val,
                       n_val_steps, batch_size):
-    """
-    Evaluate on n_val_steps batches of batch_size sequences drawn in order
-    from X_val / y_val — no resampling, comparable volume to centralised.
-    """
     val_loss = 0.0
     y_label, y_pred = [], []
 
@@ -209,7 +204,7 @@ def train_centralized(cfg, cnn, variables, X_train, y_train, X_val, y_val,
     step_fn    = jax.jit(ft.partial(gradient_step, optimizer, loss_fn))
     forward_fn = jax.jit(ft.partial(forward, cnn))
 
-    input_dtype = jnp.float32 if cfg.float else jnp.uint8
+    input_dtype = jnp.float16 if cfg.float else jnp.uint8
     output_signature = (
         tf.TensorSpec(shape=(X_train[0].shape[0], X_train[0].shape[1]), dtype=input_dtype),
         tf.TensorSpec(shape=(X_train[0].shape[0],), dtype=tf.uint8),
@@ -373,7 +368,7 @@ def train_fl(cfg, cnn, variables, clients, X_val, y_val,
 
 @hydra.main(version_base=None, config_path="configs/", config_name="cnn")
 def main(cfg: DictConfig) -> None:
-    input_dtype = jnp.float32 if cfg.float else jnp.uint8
+    input_dtype = jnp.float16 if cfg.float else jnp.uint8
     mode        = cfg.data.mode
 
     key      = jax.random.PRNGKey(cfg.train.seed)
@@ -444,7 +439,7 @@ def main(cfg: DictConfig) -> None:
         )
 
     elif cfg.train.logging == "csv":
-        csv_path = os.path.join(ckpt_path, f"{mode}.csv")
+        csv_path = os.path.join(ckpt_path, "centralized.csv" if mode == "centralized" else f"{mode}_{cfg.algorithm.name}.csv")
 
         # ------------------------------------------------------------------
         # Dispatch

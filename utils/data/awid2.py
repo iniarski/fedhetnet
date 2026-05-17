@@ -275,9 +275,19 @@ def convert_to_features(df: pd.DataFrame) -> tuple[pd.DataFrame, list[int]]:
     return features, labels
 
 
-def save_to_npz(filepath: str, features: pd.DataFrame, labels: list[int], compressed = True) -> None:
-    X = features.to_numpy()
-    y = np.array(labels)
+def save_to_npz(filepath: str, features: pd.DataFrame, labels: list[int], compressed = False) -> None:
+    X = features.to_numpy(dtype=np.float16)
+    y = np.array(labels, dtype=np.uint8)
+    f16_max = np.finfo(np.float16).max
+    
+    X = np.nan_to_num(
+        X,
+        nan=0.0,
+        posinf=f16_max,
+        neginf=-f16_max
+    )
+
+    assert np.isfinite(X).all()
 
     if compressed:
         np.savez_compressed(filepath, X=X, y=y)

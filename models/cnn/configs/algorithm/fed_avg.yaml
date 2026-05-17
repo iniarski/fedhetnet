@@ -1,4 +1,4 @@
 name: fed_avg
-client_lr: 0.01
+client_lr: 0.001
 client_momentum: 0.9
 server_lr: 0.001
