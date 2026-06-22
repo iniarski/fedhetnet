@@ -25,7 +25,7 @@ from utils.data.csvlogger import CSVLogger
 from models.cnn.model import CNN, CNNConfig
 from utils.train_utils import forward, get_dataset, get_optimizer, gradient_step, init
 from utils.lib5gpl2_utils import make_dataset
-from utils.fl_utils import build_clients, client_summary, sample_round
+from utils.fl_utils import build_clients, client_summary, sample_round, normalize_centralized
 
 N_FEATURES = 33
 N_CLASSES  = 7
@@ -77,7 +77,7 @@ def csv_log(logger: CSVLogger, log_dict: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def focal_loss_fn(model, variables, key, x, y,
-                  gamma: float = 2.0, eps: float = 1e-7):
+                  gamma: float = 3.0, eps: float = 1e-7):
     logits, state = forward(model, variables, key, *x)
     probs    = jax.nn.softmax(logits, axis=-1)
     ohe      = jax.nn.one_hot(y, num_classes=N_CLASSES)
@@ -86,15 +86,14 @@ def focal_loss_fn(model, variables, key, x, y,
     return loss, state
 
 
-def focal_loss_fedjax(batch, preds,
-                      gamma: float = 2.0, eps: float = 1e-7):
-    """FedJAX signature: (batch, preds) → scalar."""
-    y     = batch["y"]
-    probs = jax.nn.softmax(preds, axis=-1)
-    ohe   = jax.nn.one_hot(y, num_classes=N_CLASSES)
-    p_t   = jnp.sum(ohe * probs, axis=-1)
-    return -jnp.mean((1 - p_t) ** gamma * jnp.log(p_t + eps))
-
+def focal_loss_fedjax(batch, preds, gamma: float = 3.0, eps: float = 1e-7):
+    y        = batch["y"]
+    log_prob = jax.nn.log_softmax(preds, axis=-1)
+    ohe      = jax.nn.one_hot(y, num_classes=N_CLASSES)
+    log_p_t  = jnp.sum(ohe * log_prob, axis=-1)
+    # log_p_t  = jnp.maximum(log_p_t, jnp.log(eps))   # floor at -16.1, matches eps version
+    p_t      = jnp.exp(log_p_t)
+    return -jnp.mean((1 - p_t) ** gamma * log_p_t)
 
 # ---------------------------------------------------------------------------
 # Validation
@@ -118,18 +117,17 @@ def run_validation_centralized(loss_fn, forward_fn, variables,
 
 
 def run_validation_fl(apply_for_eval, variables, X_val, y_val,
-                      n_val_steps, batch_size):
-    val_loss = 0.0
+                      n_val_steps, batch_size, seed=0):
+    idx = np.random.default_rng(seed).permutation(len(X_val))
+    val_loss  = 0.0
     y_label, y_pred = [], []
 
     for i in range(n_val_steps):
-        start = i * batch_size
-        end   = start + batch_size
-        if end > len(X_val):
-            break
-
-        x      = jnp.stack(X_val[start:end])   # (B, T, F)
-        y      = jnp.stack(y_val[start:end])   # (B, T)
+        start   = i * batch_size
+        end     = start + batch_size
+        batch_idx = idx[start:end]
+        x      = jnp.stack([X_val[j] for j in batch_idx])
+        y      = jnp.stack([y_val[j] for j in batch_idx])
         batch  = {"x": x, "y": y}
         logits = apply_for_eval(variables, batch)
         val_loss += float(focal_loss_fedjax(batch, logits))
@@ -264,8 +262,18 @@ def train_fl(cfg, cnn, variables, clients, X_val, y_val,
     fedjax_model = build_fedjax_model(cnn)
     client_summary(clients)
 
+    if cfg.algorithm.use_server_optimizer:
+        server_optimizer = fedjax.optimizers.adam(cfg.algorithm.server_lr)
+    else:
+        server_optimizer = fedjax.optimizers.sgd(1.0, 0.0)
     client_optimizer = fedjax.optimizers.adam(cfg.algorithm.client_lr,)
-    server_optimizer = fedjax.optimizers.adam(cfg.algorithm.server_lr)
+    # client_optimizer = fedjax.optimizers.sgd(cfg.algorithm.client_lr, cfg.algorithm.client_momentum)
+    client_optimizer = fedjax.optimizers.create_optimizer_from_optax(
+        get_optimizer(
+        **cfg.optimizer
+        )
+    )
+
     algorithm = None
 
     if cfg.algorithm.name == 'fed_avg':
@@ -311,6 +319,16 @@ def train_fl(cfg, cnn, variables, clients, X_val, y_val,
     server_state    = algorithm.init(variables)
     n_rounds        = int(cfg.data.n_rounds)
     clients_per_rnd = int(cfg.data.clients_per_round)
+
+    # How many batches does one client actually yield per round?
+    one_client = sample_round(clients, n_per_round=1, round_num=0, base_seed=cfg.train.seed)[0]
+    _, client_ds, _ = one_client
+    batches = list(client_ds.shuffle_repeat_batch(
+        fedjax.ShuffleRepeatBatchHParams(
+            batch_size=cfg.train.batch_size,
+            num_epochs=cfg.data.local_epochs,  # or wherever this param lives
+        )
+    ))
 
     for round_num in trange(n_rounds, desc=f"[{mode}] rounds"):
         log_dict    = {"round": round_num}
@@ -386,25 +404,26 @@ def main(cfg: DictConfig) -> None:
     # ------------------------------------------------------------------
     # Dataset loading + client construction
     # ------------------------------------------------------------------
-    class_sampling = list(cfg.data.get("class_sampling", [0.01, 1, 3, 2, 2, 8]))
+    class_sampling = list(cfg.data.get("class_sampling", [1] * 7))
 
     if mode == "centralized":
         X_train, y_train, X_val, y_val = make_dataset(
-            script_path=cfg.data.dataset_path,
+            data_source=cfg.data.dataset_path,
             batch_size=cfg.train.seq_len,
             seed=cfg.train.seed,
             class_sampling=class_sampling,
         )
+        normalize_centralized(X_train, X_val)
         clients = None   # not used in centralized path
 
     elif mode == "fl_iid":
         X_train, y_train, X_val, y_val = make_dataset(
-            script_path=cfg.data.dataset_path,
+            data_source=cfg.data.dataset_path,
             batch_size=cfg.train.seq_len,
             seed=cfg.train.seed,
             class_sampling=class_sampling,
         )
-        clients, _, _ = build_clients(cfg, X_train, y_train)
+        clients, X_val, y_val = build_clients(cfg, X_train, y_train, X_val, y_val)
 
     elif mode == "fl_custom":
         # build_clients loads each client's file and holds out val_fraction

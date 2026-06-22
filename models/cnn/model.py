@@ -23,13 +23,11 @@ class CNN(nn.Module):
     def __call__(self, x, training=True, n_classes=7):
 
         for n_features, kernel_size in zip(self.config.cnn_dims, self.config.cnn_ker_szs):
-            x = nn.BatchNorm(use_running_average=not training)(x)
             x = nn.Conv(features=n_features, kernel_size=(kernel_size,), padding='SAME')(x)
             x = nn.gelu(x)
-        #    x = nn.max_pool(x, (3,))
             x = nn.Dropout(self.config.drop_rate)(x, deterministic=not training)
+            x = nn.max_pool(x, (1, 3), padding="SAME")
 
-        x = nn.BatchNorm(use_running_average=not training)(x)
         y = nn.Conv(features=n_classes, kernel_size=(1,), padding='SAME')(x)
 
         return y

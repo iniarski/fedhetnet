@@ -103,7 +103,7 @@ def print_labeling(lr: lib5gpl2py.LabelingRules) -> None:
 
 
 def make_dataset(
-        script_path: str,
+        data_source: str | tuple,
         class_sampling: list[float] = CLASS_SAMPLING,
         batch_size: int = 256,
         selected_features: set[str] = set(),
@@ -121,7 +121,10 @@ def make_dataset(
     if split < 0 or split > 1:
         raise Exception("split should be in range (0, 1)")
 
-    labeling_rules, np_files = read_labeling_from_script(script_path)
+    if type(data_source) is str:
+        labeling_rules, np_files = read_labeling_from_script(data_source)
+    else:
+        labeling_rules, np_files = data_source
     X_train, Y_train, X_test, Y_test = list(), list(), list(), list()
 
     def _sample_and_accumulate(tokens_by_class, labels_by_class):
@@ -267,6 +270,25 @@ def make_dataset(
 
     return X_train, Y_train, X_test, Y_test
 
+def per_file_split(script_path, n_clients=1, seed=42):
+    labeling_rules, np_files = read_labeling_from_script(script_path)
+    if n_clients == 1:
+        return [(labeling_rules, np_files)]
+    
+    clients = [
+        ({}, []) for _ in range(n_clients)
+    ]
+    
+    random.seed(seed)
+    for k, v in labeling_rules.items():
+        i = random.randint(0, n_clients - 1)
+        clients[i][0][k] = v
+    for np_file in np_files:
+        i = random.randint(0, n_clients - 1)
+        clients[i][1].append(np_file)
+        
+    return clients
+        
 
 if __name__ == '__main__':
     rules, _ = read_labeling_from_script('scripts/make_ds_npz.sh')

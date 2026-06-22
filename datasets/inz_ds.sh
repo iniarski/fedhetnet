@@ -91,4 +91,3 @@ echo data_inz password crakcing;
 
 $writer -i "${pcaps_inz_dir}password_cracking/password_cracking01.pcapng" -z "${target_dir}password_cracking01.npz" -r -l 1 -f "subtype deauth && wlan src a4:2b:b0:d3:94:6e" -s 1100406 -e 1484068
 $writer -i "${pcaps_inz_dir}password_cracking/password_cracking02.pcapng" -z "${target_dir}password_cracking02.npz" -r -l 1 -f "subtype deauth && wlan src a4:2b:b0:d3:94:6e" -s 1791853 -e 1846311
-
