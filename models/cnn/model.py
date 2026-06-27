@@ -13,6 +13,7 @@ N_FEATURES =33
 class CNNConfig:
     cnn_dims: list[int]
     cnn_ker_szs: list[int]
+    cnn_ker_dils: list[int]
     drop_rate: float
     dtype: str
 
@@ -22,11 +23,10 @@ class CNN(nn.Module):
     @nn.compact
     def __call__(self, x, training=True, n_classes=7):
 
-        for n_features, kernel_size in zip(self.config.cnn_dims, self.config.cnn_ker_szs):
-            x = nn.Conv(features=n_features, kernel_size=(kernel_size,), padding='SAME')(x)
+        for n_features, kernel_size, kernel_dil in zip(self.config.cnn_dims, self.config.cnn_ker_szs, self.config.cnn_ker_dils):
+            x = nn.Conv(features=n_features, kernel_size=(kernel_size,), padding='SAME', kernel_dilation=kernel_dil)(x)
             x = nn.gelu(x)
             x = nn.Dropout(self.config.drop_rate)(x, deterministic=not training)
-            x = nn.max_pool(x, (1, 3), padding="SAME")
 
         y = nn.Conv(features=n_classes, kernel_size=(1,), padding='SAME')(x)
 

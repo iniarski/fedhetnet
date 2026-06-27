@@ -4,8 +4,8 @@ pcaps_inz_dir="/mnt/shared/pcaps_inz/"
 
 echo data_inz jamming;
 
-$writer -i "${pcaps_inz_dir}jamming/const_jam01.pcapng" -z "${target_dir}const_jam01.npz" -f "len > 0" -l 5 -s 94310 -e 94311 -r
-$writer -i "${pcaps_inz_dir}jamming/const_jam03.pcapng" -z "${target_dir}const_jam03.npz" -f "len > 0" -l 5 -s 273933 -e 273934 -r
+# $writer -i "${pcaps_inz_dir}jamming/const_jam01.pcapng" -z "${target_dir}const_jam01.npz" -f "len > 0" -l 5 -s 94310 -e 94311 -r
+# $writer -i "${pcaps_inz_dir}jamming/const_jam03.pcapng" -z "${target_dir}const_jam03.npz" -f "len > 0" -l 5 -s 273933 -e 273934 -r
 $writer -i "${pcaps_inz_dir}jamming/react_jam01.pcapng" -z "${target_dir}react_jam01.npz" -f "(subtype probe-resp || subtype beacon) && wlan addr2 a4:2b:b0:d3:94:6e" -m -l 5 -s 581685 -e 746469 -r
 $writer -i "${pcaps_inz_dir}jamming/react_jam02.pcapng" -z "${target_dir}react_jam02.npz" -f "(subtype probe-resp || subtype beacon) && wlan addr2 a4:2b:b0:d3:94:6e" -m -l 5 -s 194578 -e 501744 -r
 $writer -i "${pcaps_inz_dir}jamming/react_jam03.pcapng" -z "${target_dir}react_jam03.npz" -f "(subtype probe-resp || subtype beacon) && wlan addr2 a4:2b:b0:d3:94:6e" -m -l 5 -s 80442 -e 137593 -r

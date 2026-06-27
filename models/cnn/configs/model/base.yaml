@@ -1,4 +1,5 @@
 cnn_dims: [64, 32, 16]
-cnn_ker_szs: [5, 3, 3]
+cnn_ker_szs: [7, 5, 3]
+cnn_ker_dils: [1, 1, 1]
 drop_rate: 0.0
 dtype: "bfloat16"

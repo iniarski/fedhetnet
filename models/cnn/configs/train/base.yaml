@@ -1,4 +1,4 @@
-batch_size: 32
+batch_size: 16
 grad_accum: 1
 n_steps: 1800
 log_freq: 200

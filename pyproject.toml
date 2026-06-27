@@ -41,7 +41,7 @@ notebook = [
 # from the project root. The root __init__.py must be deleted for this
 # to work correctly — the root dir is a project, not a package.
 where = ["."]
-include = ["models*", "utils*"]
+include = ["models*", "utils*", "algorithms*"]
 
 [tool.setuptools.package-data]
 # Include yaml configs so hydra can find them after install

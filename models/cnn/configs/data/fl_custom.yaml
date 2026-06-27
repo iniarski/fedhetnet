@@ -37,6 +37,6 @@ clients:
 clients_per_round: 3 # clients sampled per round
 
 # ── Schedule ──────────────────────────────────────────────────────────────
-n_rounds: 300
+n_rounds: 100
 val_freq: 5
 local_epochs: 1

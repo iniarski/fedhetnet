@@ -7,6 +7,7 @@ import fedjax
 import hydra
 import jax
 import jax.numpy as jnp
+import optax
 import numpy as np
 import tensorflow as tf
 import wandb
@@ -21,6 +22,7 @@ from sklearn.metrics import (
 from tqdm import trange
 
 import utils.export
+from algorithms.scaffold import scaffold
 from utils.data.csvlogger import CSVLogger
 from models.cnn.model import CNN, CNNConfig
 from utils.train_utils import forward, get_dataset, get_optimizer, gradient_step, init
@@ -77,7 +79,7 @@ def csv_log(logger: CSVLogger, log_dict: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def focal_loss_fn(model, variables, key, x, y,
-                  gamma: float = 3.0, eps: float = 1e-7):
+                  gamma: float = 2.0, eps: float = 1e-7):
     logits, state = forward(model, variables, key, *x)
     probs    = jax.nn.softmax(logits, axis=-1)
     ohe      = jax.nn.one_hot(y, num_classes=N_CLASSES)
@@ -88,12 +90,15 @@ def focal_loss_fn(model, variables, key, x, y,
 
 def focal_loss_fedjax(batch, preds, gamma: float = 3.0, eps: float = 1e-7):
     y        = batch["y"]
-    log_prob = jax.nn.log_softmax(preds, axis=-1)
+    # log_prob = jax.nn.log_softmax(preds, axis=-1)
+    probs = jax.nn.softmax(preds, axis=-1)
     ohe      = jax.nn.one_hot(y, num_classes=N_CLASSES)
-    log_p_t  = jnp.sum(ohe * log_prob, axis=-1)
+    # log_p_t  = jnp.sum(ohe * log_prob, axis=-1)
     # log_p_t  = jnp.maximum(log_p_t, jnp.log(eps))   # floor at -16.1, matches eps version
-    p_t      = jnp.exp(log_p_t)
-    return -jnp.mean((1 - p_t) ** gamma * log_p_t)
+    # p_t      = jnp.exp(log_p_t)
+    p_t = jnp.sum(ohe * probs, axis = -1)
+    # return -jnp.mean((1 - p_t) ** gamma * log_p_t)
+    return -jnp.mean((1 - p_t) ** gamma * jnp.log(p_t + eps))
 
 # ---------------------------------------------------------------------------
 # Validation
@@ -269,8 +274,9 @@ def train_fl(cfg, cnn, variables, clients, X_val, y_val,
     client_optimizer = fedjax.optimizers.adam(cfg.algorithm.client_lr,)
     # client_optimizer = fedjax.optimizers.sgd(cfg.algorithm.client_lr, cfg.algorithm.client_momentum)
     client_optimizer = fedjax.optimizers.create_optimizer_from_optax(
-        get_optimizer(
-        **cfg.optimizer
+        optax.chain(
+            optax.clip_by_global_norm(1.0),
+            get_optimizer(**cfg.optimizer)
         )
     )
 
@@ -295,7 +301,7 @@ def train_fl(cfg, cnn, variables, clients, X_val, y_val,
             probs     = jax.nn.softmax(logits, axis=-1)
             ohe       = jax.nn.one_hot(y, num_classes=N_CLASSES)
             p_t       = jnp.sum(ohe * probs, axis=-1)
-            gamma, eps = 2.0, 1e-7
+            gamma, eps = 3.0, 1e-7
             return (1 - p_t) ** gamma * -jnp.log(p_t + eps)   # (B, T) — no mean
 
         algorithm = fedjax.algorithms.fed_prox.fed_prox(
@@ -308,7 +314,21 @@ def train_fl(cfg, cnn, variables, clients, X_val, y_val,
             ),
             proximal_weight=cfg.algorithm.proximal_weight,   # mu — 0.0 == FedAvg
         )
+    elif cfg.algorithm.name == 'scaffold':
+        grad_fn = fedjax.model_grad(fedjax_model)
+        
+        client_lr = getattr(cfg.algorithm, 'client_lr', None)
 
+        algorithm = scaffold(
+            grad_fn=grad_fn,
+            client_optimizer=client_optimizer,
+            server_optimizer=server_optimizer,
+            client_batch_hparams=fedjax.ShuffleRepeatBatchHParams(
+                batch_size=cfg.train.batch_size,
+                num_epochs=cfg.data.local_epochs,
+            ),
+            client_learning_rate=client_lr
+        )
     else:
         raise ValueError(f"Bad algorithm: {cfg.algorithm}")
 

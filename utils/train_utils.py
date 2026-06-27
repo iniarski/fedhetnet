@@ -11,7 +11,7 @@ N_FEATURES = 33
 
 def get_optimizer(
         optimizer, lr, b1=0.9, b2=0.95, eps=1e-8, weight_decay=0.0, warmup_pct=0.1,
-        n_steps=int(1e5), div_factor=25, final_div_factor=1e4, lr_schedule="constant", grad_accum=1
+        n_steps=int(1e5), div_factor=25, final_div_factor=1e4, lr_schedule="constant", grad_accum=1, momentum=0.9
 ):
     if lr_schedule == "cosine":
         lr = optax.cosine_onecycle_schedule(n_steps, lr, warmup_pct, div_factor, final_div_factor)
@@ -23,7 +23,7 @@ def get_optimizer(
     elif optimizer == "adamw":
         optimizer = optax.adamw(lr, b1, b2, eps, weight_decay=weight_decay)
     elif optimizer == "sgd":
-        optimizer = optax.sgd(lr)
+        optimizer = optax.sgd(lr, momentum=momentum)
 
     if grad_accum > 1:
         optimizer = optax.MultiSteps(optimizer, grad_accum)

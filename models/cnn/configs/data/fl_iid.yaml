@@ -17,6 +17,6 @@ n_clients: 10
 clients_per_round: 3
 
 # ── Schedule ──────────────────────────────────────────────────────────────
-n_rounds: 200
+n_rounds: 100
 val_freq: 5
 local_epochs: 1

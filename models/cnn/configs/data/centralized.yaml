@@ -10,8 +10,8 @@ mode: centralized
 
 dataset_path: "/home/winiarski/fedhetnet/datasets/full_ds.sh"
 
-class_sampling: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+class_sampling: [0.2, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
 
 # ── Schedule ──────────────────────────────────────────────────────────────
-n_rounds: 20000
-val_freq: 400
+n_rounds: 30000
+val_freq: 1000

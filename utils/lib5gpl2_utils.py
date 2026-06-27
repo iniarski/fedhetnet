@@ -112,7 +112,7 @@ def make_dataset(
         buffer_size: int = int(5e6),
         float_tokenization: bool = True,
         normal_only: bool = False,
-        split: float = 0.8,
+        split: float = 0.95,
         n_features: int = N_FEATURES
 ) -> tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray], list[np.ndarray]]:
     n_classes = len(class_sampling)
