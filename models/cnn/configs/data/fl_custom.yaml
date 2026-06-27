@@ -11,29 +11,32 @@ mode: fl_custom
 
 # Validation data (shared, centralised evaluati
 
-class_sampling: [1, 1, 1, 1, 1, 1, 1] # default; overridable per client
+class_sampling: [0.01, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
 
 # ── Client definitions ────────────────────────────────────────────────────
 clients:
-  - id: 0
-    path: "/home/winiarski/fedhetnet/datasets/awid3_ds.sh"
-  - id: 1
-    path: "/home/winiarski/fedhetnet/datasets/f_ds.sh"
-  - id: 2
-    path: "/home/winiarski/fedhetnet/datasets/inz_ds.sh"
-  - id: 3
-    path: "/home/winiarski/fedhetnet/datasets/awid2_f_trn.sh"
-  - id: 4
-    path: "/home/winiarski/fedhetnet/datasets/awid2_f_tst.sh"
-  - id: 5
-    path: "/home/winiarski/fedhetnet/datasets/awid2_r_trn.sh"
-  - id: 6
-    path: "/home/winiarski/fedhetnet/datasets/awid2_r_tst.sh"
+    - id: 1
+      path: "/home/winiarski/fedhetnet/datasets/awid3_ds.sh"
+      split: 2
+    - id: 2
+      path: "/home/winiarski/fedhetnet/datasets/f_ds.sh"
+      split: 2
+    - id: 3
+      path: "/home/winiarski/fedhetnet/datasets/inz_ds.sh"
+      split: 2
+    - id: 4
+      path: "/home/winiarski/fedhetnet/datasets/awid2_f_trn.sh"
+    - id: 5
+      path: "/home/winiarski/fedhetnet/datasets/awid2_f_tst.sh"
+    - id: 6
+      path: "/home/winiarski/fedhetnet/datasets/awid2_r_trn.sh"
+    - id: 7
+      path: "/home/winiarski/fedhetnet/datasets/awid2_r_tst.sh"
 
 # ── Topology ──────────────────────────────────────────────────────────────
 clients_per_round: 3 # clients sampled per round
 
 # ── Schedule ──────────────────────────────────────────────────────────────
-n_rounds: 600
-val_freq: 50
+n_rounds: 300
+val_freq: 5
 local_epochs: 1

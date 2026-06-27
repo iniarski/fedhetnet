@@ -10,15 +10,8 @@ mode: centralized
 
 dataset_path: "/home/winiarski/fedhetnet/datasets/full_ds.sh"
 
-class_sampling: [1, 1, 1, 1, 1, 1, 1]
+class_sampling: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
 
 # ── Schedule ──────────────────────────────────────────────────────────────
-n_rounds: 40000
-val_freq: 200
-
-# ── Optimisers ────────────────────────────────────────────────────────────
-# server_lr is effectively unused because there is only one client (no
-# aggregation difference); set it equal to client_lr to be safe.
-client_lr: 0.001
-client_momentum: 0.9
-server_lr: 0.001
+n_rounds: 20000
+val_freq: 400
